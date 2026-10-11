@@ -13,7 +13,10 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from config import ID_ENTRADA, ID_PROCESADAS, ID_PUBLICAR, GANANCIA_PORCENTAJE
 
 BASE_DIR = Path(__file__).resolve().parent
-SCOPES = ["https://www.googleapis.com/auth/drive"]
+SCOPES = [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/drive.appdata",
+]
 EXTENSIONES_IMAGEN = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 for ruta in (r"C:\Program Files\Tesseract-OCR\tesseract.exe", r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"):
     if os.path.exists(ruta):
@@ -26,6 +29,20 @@ def obtener_servicio_drive():
     if not cred_path.exists():
         raise FileNotFoundError(f"No encuentro {cred_path}")
     creds = Credentials.from_authorized_user_file(str(token_path), SCOPES) if token_path.exists() else None
+    scopes_granted = set(getattr(creds, "scopes", None) or []) if creds else set()
+    scopes_missing = not set(SCOPES).issubset(scopes_granted)
+
+    # Un token existente no obtiene permisos nuevos por cambiar SCOPES en el código.
+    # Si falta drive.appdata, hay que autorizar de nuevo en la PC.
+    if creds and scopes_missing:
+        if os.environ.get("REVENDOR_CLOUD_MODE") == "1":
+            raise RuntimeError(
+                "GOOGLE_TOKEN_JSON no incluye el permiso OAuth drive.appdata. "
+                "En la PC, ejecutá autorizar_drive_appdata.py, guardá el nuevo token "
+                "en el secreto GOOGLE_TOKEN_JSON y volvé a ejecutar el flujo."
+            )
+        creds = None  # Fuerza una autorización interactiva con los permisos nuevos.
+
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
@@ -36,7 +53,7 @@ def obtener_servicio_drive():
             )
         else:
             flow = InstalledAppFlow.from_client_secrets_file(str(cred_path), SCOPES)
-            creds = flow.run_local_server(port=0)
+            creds = flow.run_local_server(port=0, prompt="consent", access_type="offline")
         token_path.write_text(creds.to_json(), encoding="utf-8")
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
