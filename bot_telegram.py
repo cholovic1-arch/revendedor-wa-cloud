@@ -109,16 +109,15 @@ def pesos(n): return "$" + f"{int(round(float(n))):,}".replace(",", ".")
 
 
 def texto_cartel(nombre, precios, porcentaje):
-    """Texto promocional para clientes; nunca revela el margen interno del revendedor."""
+    """Texto promocional para clientes; no revela el margen interno."""
     filas = "\n".join(f"• {p['etiqueta']}: {pesos(p['venta'])}" for p in precios)
     return (
         f"🔥 ¡OFERTA PARA APROVECHAR! 🔥\n\n"
-        f"🛍️ {nombre}\n\n"
-        f"💰 PRECIOS ESPECIALES:\n{filas}\n\n"
-        "📩 Escribinos por mensaje privado para consultar o reservar.\n"
-        "📦 Consultá disponibilidad."
+        f"🧊 {nombre}\n\n"
+        f"💰 PRECIO ESPECIAL: {filas}\n\n"
+        "📦 Consultá stock y precio de envío por mensaje privado.\n"
+        "📩 Escribinos para consultar o reservar."
     )
-
 
 def publicar_en_facebook(rec):
     """Publica el cartel aprobado como foto en la página configurada."""
@@ -194,29 +193,32 @@ def _precios_etiquetados(texto):
 
 
 def _foto_y_texto(service, lote):
-    """Clasifica heurísticamente foto limpia vs. folleto/lista; si OCR es ambiguo no inventa importes."""
+    """Separa la foto limpia del producto de la imagen de proveedor con precios."""
     items = []
     for f in lote:
         buff = pi.descargar_imagen_a_memoria(service, f["id"])
         ocr = pi.leer_texto_ocr(buff)
-        p = pi.extraer_precios(ocr)
-        etiquetas = {x["etiqueta"] for x in p}
-        señales = sum(1 for k in ("precio", "efectivo", "transfer", "lista", "mayorista", "minorista") if k in ocr.lower())
-        score = señales + len(p) * 2 + len(etiquetas & {"Lista", "Efectivo", "Transferencia"}) * 4
-        items.append({"file": f, "ocr": ocr, "score": score, "buff": pi.descargar_imagen_a_memoria(service, f["id"])})
-    if not items: raise ValueError("No hay imágenes para procesar")
-    # La imagen con menos texto/precios se considera candidata a foto del producto.
-    items.sort(key=lambda x: x["score"])
-    foto = items[0]
-    # Combina el OCR de todas las imágenes, ya que algunos proveedores separan título y precios.
-    texto = "\n\n".join(x["ocr"] for x in sorted(items, key=lambda x: x["score"], reverse=True))
+        low = ocr.lower()
+        precios = pi.extraer_precios(ocr)
+        señales_precio = sum(1 for k in ("precio de lista", "efectivo", "contado", "transferencia", "precio", "lista") if k in low)
+        items.append({"file": f, "ocr": ocr, "precios": precios,
+                      "score_precio": señales_precio * 8 + len(precios) * 10 + low.count("$") * 5,
+                      "buff": pi.descargar_imagen_a_memoria(service, f["id"])})
+    if not items:
+        raise ValueError("No hay imágenes para procesar")
+    # Editar la foto con menos señales de lista de precios; extraer datos de ambas.
+    foto = min(items, key=lambda x: (x["score_precio"], len(x["ocr"])))
+    texto = "\n\n".join(x["ocr"] for x in sorted(items, key=lambda x: x["score_precio"], reverse=True))
     nombres = [x["file"].get("name", "imagen") for x in items]
     return foto["buff"], foto["file"]["id"], nombres, texto
-
 
 def _crear_borrador(service, lote, chat_id):
     foto, foto_id, nombres, texto_ocr = _foto_y_texto(service, lote)
     detectados = _precios_detectados(texto_ocr)
+    # El precio de contado/efectivo del proveedor es la base de la reventa.
+    efectivo = [p for p in detectados if p["etiqueta"].lower() in ("efectivo", "contado", "cash")]
+    if efectivo:
+        detectados = [efectivo[0]]
     if not detectados:
         state.setdefault("pending_manual", {})[str(chat_id)] = {
             "foto_id": foto_id, "nombres": nombres, "texto_ocr": texto_ocr[:8000],
@@ -224,36 +226,37 @@ def _crear_borrador(service, lote, chat_id):
         }
         save_state()
         enviar_texto(
-            "Detecté las imágenes, pero no pude leer ningún precio con suficiente seguridad. No voy a inventar importes.\n\n"
-            f"Archivos: {', '.join(nombres)}\n\nTexto reconocido:\n{(texto_ocr or 'No se reconoció texto')[:1800]}\n\n"
-            "No pude confirmar un importe numérico. No hace falta que existan tres modalidades: se acepta uno, dos o tres precios.\n\n"
-            "Si querés completar solo este lote, respondé por ejemplo:\n"
-            "Producto: Parrilla desarmable\nLista: 174000\nEfectivo: 145000\n\n"
-            "Los originales no se mueven.",
+            "Recibí las dos imágenes, pero no pude confirmar con seguridad el precio de contado. No voy a inventar un importe.\n\n"
+            f"Archivos: {', '.join(nombres)}\n\n"
+            "Respondé en este mismo chat con el precio correcto, por ejemplo:\n"
+            "Producto: Freezer horizontal FH550\nEfectivo: 895000\n\n"
+            "Con ese dato genero el cartel usando la foto limpia. Los originales siguen en 1_entrada.",
             chat_id=chat_id)
         return
     porcentaje = float(GANANCIA_PORCENTAJE)
-    precios = [{"etiqueta": p["etiqueta"], "costo": p["costo"],
-                "venta": round(p["costo"] * (1 + porcentaje / 100))} for p in detectados[:3]]
+    precios = [{"etiqueta": "Contado", "costo": int(detectados[0]["costo"]),
+                "venta": round(int(detectados[0]["costo"]) * (1 + porcentaje / 100))}]
     nombre = pi.inferir_nombre_producto(texto_ocr)
     if nombre == "Producto":
-        # Elegir el nombre del archivo que parece más descriptivo, no asumir siempre el primero.
         nombre = re.sub(r"[_-]+", " ", Path(nombres[0]).stem)[:90] or "Producto"
     cartel = pi.crear_cartel_tres_precios(foto, nombre, precios, porcentaje)
-    did = uuid.uuid4().hex[:10]; filename = f"reventa_{did}.jpg"
+    did = uuid.uuid4().hex[:10]
+    filename = f"reventa_{did}.jpg"
     upload = pi.subir_imagen_a_drive(service, cartel, filename, ID_PUBLICAR)
     rec = {"id": did, "nombre": nombre, "precios": precios, "porcentaje": porcentaje,
            "foto_drive_id": foto_id, "archivos_origen": nombres, "output_id": upload.get("id"),
-           "output_name": filename, "estado": "pendiente", "chat_id": str(chat_id),
+           "output_name": filename, "estado": "pendiente_revision", "chat_id": str(chat_id),
            "caption": texto_cartel(nombre, precios, porcentaje), "created": int(time.time())}
-    state.setdefault("drafts", {})[did] = rec; save_state(); cartel.seek(0)
+    state.setdefault("drafts", {})[did] = rec
+    save_state()
+    cartel.seek(0)
     enviar_foto(cartel, filename, rec["caption"], teclado(did), chat_id)
-    resumen = "\n".join(f"• {p['etiqueta']}: costo {pesos(p['costo'])} → reventa {pesos(p['venta'])}" for p in precios)
     enviar_texto(
-        f"Borrador generado con {len(precios)} precio(s), guardado en la carpeta de salida de Drive.\n\n{resumen}\n\n"
-        f"Margen aplicado: {porcentaje:g}%. Revisá los importes. No se publicó externamente y los originales siguen en 1_entrada.",
+        f"Borrador listo para revisar.\n\nProducto: {nombre}\n"
+        f"Precio de contado del proveedor: {pesos(precios[0]['costo'])}\n"
+        f"Tu precio con {porcentaje:g}% de ganancia: {pesos(precios[0]['venta'])}\n\n"
+        "Todavía no se publicó. Usá Publicar, Modificar o Cancelar. Los originales siguen en 1_entrada.",
         chat_id=chat_id)
-
 
 def _regenerar(rec, chat_id):
     service = pi.obtener_servicio_drive()
