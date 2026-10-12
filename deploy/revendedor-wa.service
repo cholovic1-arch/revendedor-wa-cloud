@@ -1,0 +1,22 @@
+[Unit]
+Description=Pumprecios - publicador de promociones siempre activo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=revendedor
+Group=revendedor
+WorkingDirectory=/opt/revendedor-wa
+EnvironmentFile=/opt/revendedor-wa/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/revendedor-wa/.venv/bin/python /opt/revendedor-wa/bot_telegram.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGINT
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
