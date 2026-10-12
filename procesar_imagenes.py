@@ -190,13 +190,15 @@ def etiquetar_precio(linea):
 
 
 def extraer_precios(texto):
-    """Extrae importes argentinos y los asocia a su modalidad sin mezclar etiquetas lejanas."""
+    """Extrae precios y asocia cada importe con la etiqueta más cercana."""
     texto = (texto or "").replace("\u00a0", " ")
+    # Acepta separadores argentinos y números sin separador cuando tienen 5-9 cifras.
     patron = re.compile(r"(?<!\d)\d{1,3}(?:[.,:'’´\s][0-9Oo]{3}){1,2}(?!\d)|(?<!\d)\d[0-9Oo]{4,8}(?!\d)")
     etiquetas = [
+        ("Efectivo", re.compile(r"precio\s+de\s+contado|precio\s+contado|valor\s+efectivo|efectivo|contado|cont\.|efvo\.?|cash|1\s+pago", re.I)),
         ("Transferencia", re.compile(r"transferencia|transfer|transf\.?|transfere[nm]cia", re.I)),
-        ("Efectivo", re.compile(r"valor\s+efectivo|efectivo|contado|cash", re.I)),
         ("Lista", re.compile(r"precio\s+de\s+lista|lista|tarjeta\s*de\s+cr[eé]dito|precio\s+regular", re.I)),
+        ("Cuotas", re.compile(r"cuotas?|financiado|financiaci[oó]n|plan\s+de\s+pago|inter[eé]s|tarjeta\s+de\s+cr[eé]dito", re.I)),
         ("Mayorista", re.compile(r"mayorista|por\s+mayor", re.I)),
         ("Minorista", re.compile(r"minorista|por\s+menor", re.I)),
         ("Costo", re.compile(r"costo|proveedor", re.I)),
@@ -212,42 +214,53 @@ def extraer_precios(texto):
         valor = int(re.sub(r"\D", "", raw.replace("O", "0").replace("o", "0")) or "0")
         if not 1000 <= valor <= 100_000_000:
             continue
-        previo = texto[max(0, m.start()-8):m.start()]
-        despues = texto[m.end():min(len(texto), m.end()+8)]
+        previo = texto[max(0, m.start()-10):m.start()]
+        despues = texto[m.end():min(len(texto), m.end()+10)]
         cerca = texto[max(0, m.start()-80):min(len(texto), m.end()+80)]
+        # No descartar un importe solo porque OCR no leyó el signo $ o la etiqueta.
+        # Se validará la ambigüedad más adelante antes de generar el cartel.
         if not ("$" in previo + despues or re.search(
-            r"precio|costo|efectivo|transfer|lista|contado|valor|ars|mayorista|minorista|combo",
+            r"precio|costo|efectivo|transfer|lista|contado|valor|ars|mayorista|minorista|combo|cuotas|financ",
             cerca, re.I
-        ) or re.search(r"[.,:'’´\s]", raw)):
+        ) or re.search(r"[.,:'’´\s]", raw) or raw.isdigit()):
             continue
-        linea_actual = linea_previa = linea_siguiente = ""
+        linea_actual = ""
         inicio_linea = 0
-        for idx, (ini, fin, linea) in enumerate(offsets):
+        for ini, fin, linea in offsets:
             if ini <= m.start() <= fin:
-                linea_actual = linea
-                inicio_linea = ini
-                linea_previa = offsets[idx-1][2] if idx > 0 else ""
-                linea_siguiente = offsets[idx+1][2] if idx + 1 < len(offsets) else ""
+                linea_actual, inicio_linea = linea, ini
                 break
+        # La etiqueta de la misma línea más cercana al importe gana.
+        candidatos = []
+        pos_rel = m.start() - inicio_linea
+        for nombre, rx in etiquetas:
+            for lab in rx.finditer(linea_actual):
+                distancia = min(abs(lab.start() - pos_rel), abs(lab.end() - pos_rel))
+                candidatos.append((distancia, nombre, lab.start(), lab.end()))
         etiqueta = "Sin identificar"
-        mejor = None
-        for nivel, linea in enumerate((linea_actual, linea_previa, linea_siguiente)):
-            if not linea:
-                continue
-            for nombre, rx in etiquetas:
-                lab = rx.search(linea)
-                if not lab:
+        if candidatos:
+            distancia, nombre, _, _ = min(candidatos, key=lambda x: x[0])
+            # Evita asignar una palabra lejana al precio de otra columna.
+            if distancia <= 55:
+                etiqueta = nombre
+        # Si la etiqueta está en una línea inmediatamente vecina y no hay etiqueta local,
+        # asociarla solo cuando esa línea contiene un único importe.
+        if etiqueta == "Sin identificar":
+            idx_linea = next((i for i, (ini, fin, _) in enumerate(offsets) if ini <= m.start() <= fin), -1)
+            vecinos = []
+            if idx_linea > 0:
+                vecinos.append(offsets[idx_linea-1][2])
+            if 0 <= idx_linea < len(offsets)-1:
+                vecinos.append(offsets[idx_linea+1][2])
+            for vecina in vecinos:
+                if len(list(patron.finditer(vecina))) != 1:
                     continue
-                if nivel == 0:
-                    distancia = abs(lab.start() - (m.start() - inicio_linea))
-                elif nivel == 1:
-                    distancia = 35 + len(linea) - lab.start()
-                else:
-                    distancia = 35 + lab.start()
-                if mejor is None or distancia < mejor[0]:
-                    mejor = (distancia, nombre)
-        if mejor and mejor[0] <= 100:
-            etiqueta = mejor[1]
+                for nombre, rx in etiquetas:
+                    if rx.search(vecina):
+                        etiqueta = nombre
+                        break
+                if etiqueta != "Sin identificar":
+                    break
         li = texto.rfind("\n", 0, m.start()) + 1
         lf = texto.find("\n", m.end())
         if lf < 0:
