@@ -208,7 +208,8 @@ def _productos_de_texto_proveedor(texto):
         r"\s*(?P<moneda>USD|US\$|U\$S|DÓLARES?|DOLARES?)?",
         re.I
     )
-    for linea in (texto or "").splitlines():
+    lineas = re.split(r"\n+|\s{2,}", (texto or "").replace("\r", ""))
+    for linea in lineas:
         limpia = re.sub(r"\s+", " ", linea).strip().strip("•-* ")
         if not limpia or re.search(r"\b(total|subtotal|suma)\b", limpia, re.I):
             continue
