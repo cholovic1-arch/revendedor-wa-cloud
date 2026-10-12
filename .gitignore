@@ -1,0 +1,16 @@
+# Secretos OAuth de Google Drive
+credentials.json
+token.json
+
+# Configuración local y secretos
+.env
+.env.*
+!.env.example
+
+# Estado local del bot y temporales
+estado_revendedor.json
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log
