@@ -573,10 +573,17 @@ def vigilar_drive_una_vez():
         return
     # Cada promoción se arma con un par de imágenes: primero la lista de precios y
     # luego la foto limpia (o viceversa). No mezclar dos productos enviados seguidos.
-    lote_ids = sorted(
-        pending.keys(),
-        key=lambda fid: float(pending[fid].get("first_seen", pending[fid].get("last_seen", now)))
-    )[:2]
+    def _ordenar_foto_lote(fid):
+        archivo = pending[fid].get("file", {})
+        nombre_archivo = str(archivo.get("name", ""))
+        # Los archivos guardados por Telegram incluyen la hora Unix en el nombre.
+        # Usarla evita que el orden aleatorio de Drive mezcle las parejas antiguas.
+        m_hora = re.match(r"telegram_(\d+)_", nombre_archivo)
+        if m_hora:
+            return (0, int(m_hora.group(1)))
+        return (1, float(pending[fid].get("first_seen", pending[fid].get("last_seen", now))))
+
+    lote_ids = sorted(pending.keys(), key=_ordenar_foto_lote)[:2]
     lote = [pending[fid]["file"] for fid in lote_ids if "file" in pending[fid]]
     if not lote or not all(now >= pending[fid].get("next_retry", 0) for fid in lote_ids if fid in pending):
         log.info("Hay un lote en espera de reintento; no corresponde procesarlo en este ciclo.")
