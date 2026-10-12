@@ -68,5 +68,31 @@ jobs:
                   raise SystemExit(f"Falta el secreto {env_name} en Settings > Secrets and variables > Actions.")
               Path(filename).write_text(value, encoding="utf-8")
           PY
+      - name: Comprobar identidad del bot de Telegram y modo de recepción
+        env:
+          PUBLISHER_TELEGRAM_BOT_TOKEN: ${{ secrets.PUBLISHER_TELEGRAM_BOT_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          token = os.environ.get("PUBLISHER_TELEGRAM_BOT_TOKEN", "").strip()
+          if not token:
+              raise SystemExit("Falta el secreto PUBLISHER_TELEGRAM_BOT_TOKEN.")
+          base = f"https://api.telegram.org/bot{token}"
+          me = requests.get(f"{base}/getMe", timeout=20)
+          me.raise_for_status()
+          data = me.json()
+          if not data.get("ok"):
+              raise SystemExit("Telegram rechazó el token del publicador.")
+          bot = data["result"]
+          webhook_response = requests.get(f"{base}/getWebhookInfo", timeout=20)
+          webhook_response.raise_for_status()
+          webhook = webhook_response.json().get("result", {})
+          print(f"Bot de PUBLICACIÓN configurado: @{bot.get('username', 'sin_usuario')} (ID {bot.get('id')}).")
+          if webhook.get("url"):
+              raise SystemExit("Este token tiene un webhook activo. getUpdates no puede funcionar al mismo tiempo; no se modificó el webhook.")
+          print("Recepción por getUpdates habilitada: no hay webhook activo en este token.")
+          PY
       - name: Mantener el sondeo activo de Telegram y revisar Google Drive
         run: python run_cloud_once.py
