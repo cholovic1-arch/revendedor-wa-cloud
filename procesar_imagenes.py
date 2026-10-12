@@ -183,7 +183,8 @@ def crear_cartel_tres_precios(buffer_foto, nombre_producto, precios, porcentaje,
                 etiqueta_mostrar = etiqueta_mostrar[:35]
                 break
         d.text((44, yy + 42), etiqueta_mostrar, font=fuente_etiqueta, fill=(255,255,255))
-        valor = pesos(p["venta"])
+        importe = f"{int(round(float(p['venta']))):,}".replace(",", ".")
+        valor = f"USD {importe}" if str(p.get("moneda", "ARS")).upper() == "USD" else "$" + importe
         f = _fuente(max(39, min(62, ancho // 18)), True)
         bbox = d.textbbox((0,0), valor, font=f)
         d.text((ancho - (bbox[2]-bbox[0]) - 42, yy + 35), valor, font=f, fill=(255,214,80))
