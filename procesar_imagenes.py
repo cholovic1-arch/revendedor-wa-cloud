@@ -130,7 +130,7 @@ def pesos(n): return "$" + f"{int(round(float(n))):,}".replace(",", ".")
 
 def crear_cartel_tres_precios(buffer_foto, nombre_producto, precios, porcentaje, detalle=""):
     """Crea un cartel que adapta el alto a entre 1 y 3 precios detectados."""
-    precios = list(precios or [])[:3]
+    precios = list(precios or [])[:6]
     if not precios: raise ValueError("No hay precios para mostrar")
     if buffer_foto is None:
         # Cartel original sin fotografía: fondo gráfico propio, sin inventar una foto de producto.
@@ -169,16 +169,24 @@ def crear_cartel_tres_precios(buffer_foto, nombre_producto, precios, porcentaje,
     yy = y + cabecera
     for p in precios:
         etiqueta = str(p.get("etiqueta", "Precio")).strip().upper()[:24]
+        producto = str(p.get("producto", "")).strip()
         es_contado = etiqueta in ("EFECTIVO", "CONTADO", "CASH", "PRECIO DE CONTADO", "VENTA AL CONTADO")
-        fondo = (15, 91, 67) if es_contado else (29,48,70)
-        borde = (104, 235, 178) if es_contado else (67,92,119)
-        d.rounded_rectangle((24, yy, ancho - 24, yy + alto_fila - 8), radius=18, fill=fondo, outline=borde, width=4 if es_contado else 2)
-        etiqueta_mostrar = ("VENTA AL CONTADO" if es_contado else etiqueta or "PRECIO")[:24]
-        d.text((44, yy + 12), etiqueta_mostrar, font=_fuente(max(19, ancho // 43), True), fill=(255,255,255))
+        fondo = (15, 91, 67) if (es_contado or producto) else (29,48,70)
+        borde = (104, 235, 178) if (es_contado or producto) else (67,92,119)
+        d.rounded_rectangle((24, yy, ancho - 24, yy + alto_fila - 8), radius=18, fill=fondo, outline=borde, width=4 if (es_contado or producto) else 2)
+        etiqueta_mostrar = producto[:38] if producto else ("VENTA AL CONTADO" if es_contado else etiqueta or "PRECIO")
+        fuente_etiqueta = _fuente(max(16, min(23, ancho // 43)), True)
+        # Mantener el nombre a la izquierda y reservar la derecha para el precio grande.
+        while len(etiqueta_mostrar) > 18 and d.textbbox((0, 0), etiqueta_mostrar, font=fuente_etiqueta)[2] > ancho * 0.53:
+            fuente_etiqueta = _fuente(max(15, int(fuente_etiqueta.size) - 1), True)
+            if fuente_etiqueta.size <= 15:
+                etiqueta_mostrar = etiqueta_mostrar[:35]
+                break
+        d.text((44, yy + 42), etiqueta_mostrar, font=fuente_etiqueta, fill=(255,255,255))
         valor = pesos(p["venta"])
-        f = _fuente(max(43, min(66, ancho // 17)), True)
+        f = _fuente(max(39, min(62, ancho // 18)), True)
         bbox = d.textbbox((0,0), valor, font=f)
-        d.text((ancho - (bbox[2]-bbox[0]) - 42, yy + 43), valor, font=f, fill=(255,214,80))
+        d.text((ancho - (bbox[2]-bbox[0]) - 42, yy + 35), valor, font=f, fill=(255,214,80))
         yy += alto_fila
     d.text((28, canvas.height - 48), "CONSULTÁ STOCK Y PRECIO DE ENVÍO", font=_fuente(max(17, ancho // 48), True), fill=(255,255,255))
     out = io.BytesIO(); canvas.save(out, "JPEG", quality=94, optimize=True); out.seek(0); return out
