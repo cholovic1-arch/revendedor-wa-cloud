@@ -215,15 +215,14 @@ def _foto_y_texto(service, lote):
 def _crear_borrador(service, lote, chat_id):
     foto, foto_id, nombres, texto_ocr = _foto_y_texto(service, lote)
     detectados = _precios_detectados(texto_ocr)
-    # El precio de contado/efectivo del proveedor es la base de la reventa.
+    # Un único importe se toma como base. Con varios, se exige reconocer contado/efectivo.
     efectivo = [p for p in detectados if p["etiqueta"].lower() in ("efectivo", "contado", "cash")]
-    if efectivo:
-        detectados = [efectivo[0]]
-    elif len(detectados) == 1:
-        # Un solo importe legible: se toma como precio base del proveedor.
+    if len(detectados) == 1:
         detectados = [detectados[0]]
+    elif len(efectivo) == 1:
+        detectados = [efectivo[0]]
     else:
-        # Nunca elegir al azar entre precio de lista y contado.
+        # Si hay varias opciones y no se identifica contado inequívocamente, pedir confirmación.
         detectados = []
     if not detectados:
         state.setdefault("pending_manual", {})[str(chat_id)] = {
