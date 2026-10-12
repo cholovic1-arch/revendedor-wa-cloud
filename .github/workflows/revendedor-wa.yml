@@ -6,8 +6,8 @@ on:
     branches:
       - main
   schedule:
-    # Revisión automática cada 5 minutos, fuera del minuto cero para reducir demoras.
-    - cron: "2-59/5 * * * *"
+    # Revisión automática cada 5 minutos.
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -93,39 +93,6 @@ jobs:
           if webhook.get("url"):
               raise SystemExit("Este token tiene un webhook activo. getUpdates no puede funcionar al mismo tiempo; no se modificó el webhook.")
           print("Recepción por getUpdates habilitada: no hay webhook activo en este token.")
-          PY
-      - name: Probar entrega al chat configurado (solo al actualizar código)
-        if: github.event_name == 'push'
-        env:
-          PUBLISHER_TELEGRAM_BOT_TOKEN: ${{ secrets.PUBLISHER_TELEGRAM_BOT_TOKEN }}
-          PUBLISHER_TELEGRAM_CHAT_ID: ${{ secrets.PUBLISHER_TELEGRAM_CHAT_ID }}
-        run: |
-          python - <<'PY'
-          import os
-          import requests
-
-          token = os.environ.get("PUBLISHER_TELEGRAM_BOT_TOKEN", "").strip()
-          chat_id = os.environ.get("PUBLISHER_TELEGRAM_CHAT_ID", "").strip()
-          if not token or not chat_id:
-              print("AVISO: falta el token o el chat configurado; no se pudo probar el envío.")
-              raise SystemExit(0)
-          response = requests.post(
-              f"https://api.telegram.org/bot{token}/sendMessage",
-              data={
-                  "chat_id": chat_id,
-                  "text": "Pumprecios: prueba de conexión del publicador. Este es el bot configurado para recibir fotos y precios. Las publicaciones en Facebook siguen requiriendo tu confirmación."
-              },
-              timeout=20,
-          )
-          try:
-              payload = response.json()
-          except ValueError:
-              payload = {}
-          if response.ok and payload.get("ok"):
-              print("Telegram confirmó el envío de prueba al chat configurado.")
-          else:
-              description = payload.get("description", f"HTTP {response.status_code}")
-              print(f"AVISO: Telegram rechazó el chat configurado: {description}")
           PY
       - name: Mantener el sondeo activo de Telegram y revisar Google Drive
         run: python run_cloud_once.py
