@@ -344,9 +344,16 @@ def procesar_callback(cb):
 
 def procesar_mensaje(msg):
     chat_id = str(msg.get("chat", {}).get("id", ""))
-    if chat_id != str(TELEGRAM_CHAT_ID): return
+    if chat_id != str(TELEGRAM_CHAT_ID):
+        log.warning("Mensaje ignorado: chat de Telegram no autorizado (chat_id=%s). Revisar PUBLISHER_TELEGRAM_CHAT_ID en GitHub Actions.", chat_id or "vacío")
+        if (msg.get("text") or "").strip().lower() in ("/start", "/ayuda", "ayuda"):
+            enviar_texto("El bot está en línea, pero este chat no está autorizado para operar. Revisá PUBLISHER_TELEGRAM_CHAT_ID en los secretos de GitHub Actions.", chat_id=chat_id)
+        return
     texto = (msg.get("text") or msg.get("caption") or "").strip()
-    if not texto: return
+    if not texto:
+        if msg.get("photo"):
+            enviar_texto("Recibí la foto, pero este flujo procesa las imágenes desde la carpeta 1_entrada de Google Drive. Subí allí la foto del producto y la lista de precios; después el bot te enviará el borrador por Telegram.", chat_id=chat_id)
+        return
     if texto.lower() in ("/start", "/ayuda", "ayuda"):
         enviar_texto("Revendedor WA activo. Subí a 1_entrada de Google Drive la foto del producto y la lista de precios. El bot detecta de 1 a 3 precios, adapta el cartel y te lo envía para confirmar, modificar o cancelar. Si el OCR necesita ayuda, enviá:\n\nProducto: Nombre\nPrecio: 100000\n\nTambién podés usar etiquetas como Lista, Efectivo y Transferencia\n\nLos originales no se mueven. La aprobación no publica en redes; eso requiere conectar esas cuentas.", chat_id=chat_id); return
     if chat_id in state.get("waiting_edit", {}):
