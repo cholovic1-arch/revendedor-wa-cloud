@@ -219,6 +219,12 @@ def _crear_borrador(service, lote, chat_id):
     efectivo = [p for p in detectados if p["etiqueta"].lower() in ("efectivo", "contado", "cash")]
     if efectivo:
         detectados = [efectivo[0]]
+    elif len(detectados) == 1:
+        # Un solo importe legible: se toma como precio base del proveedor.
+        detectados = [detectados[0]]
+    else:
+        # Nunca elegir al azar entre precio de lista y contado.
+        detectados = []
     if not detectados:
         state.setdefault("pending_manual", {})[str(chat_id)] = {
             "foto_id": foto_id, "nombres": nombres, "texto_ocr": texto_ocr[:8000],
@@ -226,9 +232,9 @@ def _crear_borrador(service, lote, chat_id):
         }
         save_state()
         enviar_texto(
-            "Recibí las dos imágenes, pero no pude confirmar con seguridad el precio de contado. No voy a inventar un importe.\n\n"
+            "Recibí las dos imágenes, pero no pude asociar con seguridad el precio de contado. No voy a elegir entre precios de lista y contado al azar.\n\n"
             f"Archivos: {', '.join(nombres)}\n\n"
-            "Respondé en este mismo chat con el precio correcto, por ejemplo:\n"
+            "Respondé en este mismo chat con el precio de contado, por ejemplo:\n"
             "Producto: Freezer horizontal FH550\nEfectivo: 895000\n\n"
             "Con ese dato genero el cartel usando la foto limpia. Los originales siguen en 1_entrada.",
             chat_id=chat_id)
@@ -281,11 +287,13 @@ def _modificar(rec, chat_id, instruccion):
         rec["porcentaje"] = pct
         for p in rec["precios"]: p["venta"] = round(p["costo"] * (1 + pct / 100))
     else:
-        m = re.search(r"(lista|efectivo|transferencia|precio\s*[1-3]|mayorista|minorista)\D{0,20}(\d[\d.,]*)", instruccion, re.I)
+        m = re.search(r"(lista|efectivo|contado|cash|transferencia|precio\s*[1-3]|mayorista|minorista)\D{0,20}(\d[\d.,]*)", instruccion, re.I)
         if not m:
             enviar_texto("No entendí el cambio. Escribí 35% para recalcular todo, o por ejemplo: efectivo 125000.", chat_id=chat_id)
             return
-        modalidad = re.sub(r"\s+", " ", m.group(1).strip()).title(); valor = int(re.sub(r"\D", "", m.group(2)))
+        modalidad = re.sub(r"\s+", " ", m.group(1).strip()).title()
+        if modalidad.lower() in ("efectivo", "contado", "cash"): modalidad = "Contado"
+        valor = int(re.sub(r"\D", "", m.group(2)))
         if valor <= 0: enviar_texto("El precio debe ser mayor que cero.", chat_id=chat_id); return
         item = next((p for p in rec["precios"] if p["etiqueta"].lower() == modalidad.lower()), None)
         if not item: enviar_texto("No encontré esa modalidad en este cartel. Usá una etiqueta que aparezca en la imagen, por ejemplo Lista, Efectivo, Transferencia o Precio 1.", chat_id=chat_id); return
