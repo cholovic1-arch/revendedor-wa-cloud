@@ -155,25 +155,32 @@ def crear_cartel_tres_precios(buffer_foto, nombre_producto, precios, porcentaje,
     ancho, alto = max(900, img.width), img.height
     if img.width != ancho:
         alto = int(img.height * ancho / img.width); img = img.resize((ancho, alto), Image.Resampling.LANCZOS)
-    alto_fila = 82
-    cabecera = 108
-    pie = 76
+    # Panel más alto y precio muy destacado para que se lea en publicaciones desde el celular.
+    alto_fila = 126
+    cabecera = 112
+    pie = 70
     alto_panel = cabecera + alto_fila * len(precios) + pie
     canvas = Image.new("RGB", (ancho, alto + alto_panel), (13, 24, 40))
     canvas.paste(img, (0, 0)); d = ImageDraw.Draw(canvas); y = alto
     d.rectangle((0, y, ancho, canvas.height), fill=(13, 24, 40))
     titulo = str(nombre_producto or "Producto")[:80]
-    d.text((28, y + 12), titulo, font=_fuente(max(27, ancho // 29), True), fill=(255,255,255))
-    d.text((30, y + 55), "PRECIOS ESPECIALES", font=_fuente(max(17, ancho // 52), True), fill=(104,235,178))
+    d.text((28, y + 10), titulo, font=_fuente(max(28, ancho // 27), True), fill=(255,255,255))
+    d.text((30, y + 58), "PRECIO DE VENTA AL CONTADO", font=_fuente(max(20, ancho // 43), True), fill=(104,235,178))
     yy = y + cabecera
     for p in precios:
-        d.rounded_rectangle((24, yy, ancho - 24, yy + alto_fila - 8), radius=13, fill=(29,48,70), outline=(67,92,119), width=2)
-        etiqueta = str(p.get("etiqueta", "Precio"))[:24].upper()
-        d.text((42, yy + 17), etiqueta, font=_fuente(max(17, ancho // 52), True), fill=(225,232,242))
-        valor = pesos(p["venta"]); f = _fuente(max(25, ancho // 32), True); bbox = d.textbbox((0,0), valor, font=f)
-        d.text((ancho - (bbox[2]-bbox[0]) - 44, yy + 11), valor, font=f, fill=(255,214,80))
+        etiqueta = str(p.get("etiqueta", "Precio")).strip().upper()[:24]
+        es_contado = etiqueta in ("EFECTIVO", "CONTADO", "CASH", "PRECIO DE CONTADO", "VENTA AL CONTADO")
+        fondo = (15, 91, 67) if es_contado else (29,48,70)
+        borde = (104, 235, 178) if es_contado else (67,92,119)
+        d.rounded_rectangle((24, yy, ancho - 24, yy + alto_fila - 8), radius=18, fill=fondo, outline=borde, width=4 if es_contado else 2)
+        etiqueta_mostrar = ("VENTA AL CONTADO" if es_contado else etiqueta or "PRECIO")[:24]
+        d.text((44, yy + 12), etiqueta_mostrar, font=_fuente(max(19, ancho // 43), True), fill=(255,255,255))
+        valor = pesos(p["venta"])
+        f = _fuente(max(43, min(66, ancho // 17)), True)
+        bbox = d.textbbox((0,0), valor, font=f)
+        d.text((ancho - (bbox[2]-bbox[0]) - 42, yy + 43), valor, font=f, fill=(255,214,80))
         yy += alto_fila
-    d.text((28, canvas.height - 52), "CONSULTÁ STOCK Y PRECIO DE ENVÍO", font=_fuente(max(16, ancho // 52), True), fill=(255,255,255))
+    d.text((28, canvas.height - 48), "CONSULTÁ STOCK Y PRECIO DE ENVÍO", font=_fuente(max(17, ancho // 48), True), fill=(255,255,255))
     out = io.BytesIO(); canvas.save(out, "JPEG", quality=94, optimize=True); out.seek(0); return out
 
 
