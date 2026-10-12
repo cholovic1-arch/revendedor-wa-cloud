@@ -342,6 +342,47 @@ def procesar_callback(cb):
         enviar_texto("Borrador cancelado. No se publicó nada ni se movieron los originales.", chat_id=chat_id)
 
 
+def _guardar_imagen_telegram_en_drive(msg, chat_id):
+    """Descarga una foto recibida por Telegram y la copia a 1_entrada de Drive."""
+    foto = None
+    nombre = None
+    mime_type = "image/jpeg"
+    if msg.get("photo"):
+        foto = msg["photo"][-1]  # Telegram entrega primero las miniaturas y al final la mayor.
+        nombre = f"telegram_{int(time.time())}_{foto.get('file_unique_id', uuid.uuid4().hex)}.jpg"
+    else:
+        documento = msg.get("document") or {}
+        mime = str(documento.get("mime_type", "")).lower()
+        if not mime.startswith("image/"):
+            return False
+        foto = documento
+        extension = Path(str(documento.get("file_name") or "imagen.jpg")).suffix.lower()
+        if extension not in (".jpg", ".jpeg", ".png", ".webp"):
+            extension = ".jpg" if mime in ("image/jpeg", "image/jpg") else ".png" if mime == "image/png" else ".webp" if mime == "image/webp" else ".jpg"
+        nombre = f"telegram_{int(time.time())}_{documento.get('file_unique_id', uuid.uuid4().hex)}{extension}"
+        mime_type = mime or "image/jpeg"
+    if not foto:
+        return False
+    file_id = foto.get("file_id")
+    if not file_id:
+        raise RuntimeError("Telegram no entregó el identificador de la imagen.")
+    meta = requests.get(f"{API}/getFile", params={"file_id": file_id}, timeout=30)
+    meta.raise_for_status()
+    payload = meta.json()
+    if not payload.get("ok") or not payload.get("result", {}).get("file_path"):
+        raise RuntimeError(payload.get("description", "Telegram no permitió descargar la imagen."))
+    file_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{payload['result']['file_path']}"
+    descarga = requests.get(file_url, timeout=90)
+    descarga.raise_for_status()
+    if not descarga.content:
+        raise RuntimeError("Telegram devolvió una imagen vacía.")
+    buffer = io.BytesIO(descarga.content)
+    service = pi.obtener_servicio_drive()
+    subida = pi.subir_imagen_a_drive(service, buffer, nombre, ID_ENTRADA, mime_type=mime_type)
+    log.info("Foto recibida por Telegram guardada en 1_entrada de Drive: %s (%s)", nombre, subida.get("id", "sin ID"))
+    return nombre
+
+
 def procesar_mensaje(msg):
     chat_id = str(msg.get("chat", {}).get("id", ""))
     if chat_id != str(TELEGRAM_CHAT_ID):
@@ -349,13 +390,27 @@ def procesar_mensaje(msg):
         if (msg.get("text") or "").strip().lower() in ("/start", "/ayuda", "ayuda"):
             enviar_texto("El bot está en línea, pero este chat no está autorizado para operar. Revisá PUBLISHER_TELEGRAM_CHAT_ID en los secretos de GitHub Actions.", chat_id=chat_id)
         return
+    # Las fotos se reciben directamente por Telegram, se guardan en 1_entrada de Drive
+    # y el ciclo normal las detecta para iniciar el análisis del lote.
+    if msg.get("photo") or (msg.get("document") or {}).get("mime_type", "").lower().startswith("image/"):
+        try:
+            nombre = _guardar_imagen_telegram_en_drive(msg, chat_id)
+            if nombre:
+                enviar_texto(
+                    f"Foto recibida y guardada en 1_entrada de Google Drive: {nombre}.\n"
+                    "La estoy incorporando al lote; enviá las demás fotos enseguida. "
+                    "Cuando termine la carga, analizaré el producto y los precios y te mandaré el borrador para revisar.",
+                    chat_id=chat_id)
+                return
+        except Exception as e:
+            log.exception("No pude guardar en Drive una imagen recibida por Telegram")
+            enviar_texto(f"No pude guardar la foto en 1_entrada de Google Drive: {e}. No se inició el análisis; podés volver a enviarla.", chat_id=chat_id)
+            return
     texto = (msg.get("text") or msg.get("caption") or "").strip()
     if not texto:
-        if msg.get("photo"):
-            enviar_texto("Recibí la foto, pero este flujo procesa las imágenes desde la carpeta 1_entrada de Google Drive. Subí allí la foto del producto y la lista de precios; después el bot te enviará el borrador por Telegram.", chat_id=chat_id)
         return
     if texto.lower() in ("/start", "/ayuda", "ayuda"):
-        enviar_texto("Revendedor WA activo. Subí a 1_entrada de Google Drive la foto del producto y la lista de precios. El bot detecta de 1 a 3 precios, adapta el cartel y te lo envía para confirmar, modificar o cancelar. Si el OCR necesita ayuda, enviá:\n\nProducto: Nombre\nPrecio: 100000\n\nTambién podés usar etiquetas como Lista, Efectivo y Transferencia\n\nLos originales no se mueven. La aprobación no publica en redes; eso requiere conectar esas cuentas.", chat_id=chat_id); return
+        enviar_texto("Revendedor WA activo. Enviá directamente por este chat las fotos del producto y de la lista de precios: las guardaré en 1_entrada de Google Drive y comenzaré el análisis automáticamente. También podés enviar un cartel sin foto con:\n\nProducto: Taladro\nPrecio: 125000\n\nO usar Efectivo y Transferencia. No uses precios financiados ni cuotas. Los originales no se mueven y nada se publica en Facebook sin tu confirmación.", chat_id=chat_id); return
     if chat_id in state.get("waiting_edit", {}):
         did = state["waiting_edit"].pop(chat_id, None); save_state(); rec = state.get("drafts", {}).get(did)
         if not rec: enviar_texto("No encuentro el borrador para modificar.", chat_id=chat_id); return
