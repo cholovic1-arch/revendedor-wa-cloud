@@ -526,12 +526,12 @@ def procesar_mensaje(msg):
                 if texto:
                     log.info("Foto con texto adjunto conservada en la cola de imágenes: %s", foto_recibida["name"])
                     enviar_texto(
-                        f"Foto recibida y guardada en 1_entrada de Google Drive: {foto_recibida['name']}.\\n"
+                        f"Foto recibida y guardada en 1_entrada de Google Drive: {foto_recibida['name']}.\n"
                         "El texto adjunto no se procesará como un mensaje separado. Enviá la otra foto del mismo producto; analizaré el par y te enviaré un borrador para revisar antes de publicar.",
                         chat_id=chat_id)
                 else:
                     enviar_texto(
-                        f"Foto recibida y guardada en 1_entrada de Google Drive: {foto_recibida['name']}.\\n"
+                        f"Foto recibida y guardada en 1_entrada de Google Drive: {foto_recibida['name']}.\n"
                         "Quedó registrada para procesar. Enviá la otra foto ahora; cuando termines, el sistema analizará el lote y te enviará el borrador con botones para revisar antes de publicar.",
                         chat_id=chat_id)
                 return
