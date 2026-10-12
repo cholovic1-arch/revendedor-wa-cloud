@@ -169,6 +169,9 @@ def _precios_detectados(texto):
         etiqueta = str(p.get("etiqueta", "")).strip()
         etiqueta_norm = etiqueta.lower()
         es_contado = etiqueta_norm in ("efectivo", "contado", "cash")
+        # Excluir cuotas por etiqueta OCR aunque la palabra haya quedado en otra línea.
+        if etiqueta_norm in ("cuotas", "financiado", "financiación", "financiacion"):
+            continue
         if re.search(r"financiad|cuotas?|tarjeta de cr[eé]dito|plan de pago|inter[eé]s", linea, re.I) and not es_contado:
             continue
         try:
@@ -224,8 +227,17 @@ def _crear_borrador(service, lote, chat_id):
         detectados = [detectados[0]]
     elif len(efectivo) == 1:
         detectados = [efectivo[0]]
+    elif len(detectados) > 1:
+        # El OCR de listas en columnas a veces pierde la etiqueta "efectivo".
+        # Tras excluir importes financiados, usar el menor precio detectado como
+        # aproximación conservadora al contado y dejar siempre el borrador sujeto a aprobación.
+        elegido = min(detectados, key=lambda p: int(p["costo"]))
+        log.warning(
+            "No se reconoció la etiqueta contado; se prepara borrador con el menor importe no financiado: %s (%s)",
+            elegido.get("costo"), elegido.get("origen", "")
+        )
+        detectados = [elegido]
     else:
-        # Si hay varias opciones y no se identifica contado inequívocamente, pedir confirmación.
         detectados = []
     if not detectados:
         # Si este lote ya fue reintentado con la versión actual del OCR,
@@ -559,7 +571,12 @@ def vigilar_drive_una_vez():
     if now - latest < 30:
         log.info("Hay imágenes recién detectadas; se procesarán en el próximo ciclo para dejar terminar la carga.")
         return
-    lote_ids = list(pending.keys())
+    # Cada promoción se arma con un par de imágenes: primero la lista de precios y
+    # luego la foto limpia (o viceversa). No mezclar dos productos enviados seguidos.
+    lote_ids = sorted(
+        pending.keys(),
+        key=lambda fid: float(pending[fid].get("first_seen", pending[fid].get("last_seen", now)))
+    )[:2]
     lote = [pending[fid]["file"] for fid in lote_ids if "file" in pending[fid]]
     if not lote or not all(now >= pending[fid].get("next_retry", 0) for fid in lote_ids if fid in pending):
         log.info("Hay un lote en espera de reintento; no corresponde procesarlo en este ciclo.")
