@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Google Drive, OCR y diseño de carteles de Revendedor WA."""
 from __future__ import annotations
-import io, os, re
+import io, os, re, time
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageEnhance
 import pytesseract
@@ -83,10 +83,28 @@ def descargar_imagen_a_memoria(service, file_id):
 
 
 def subir_imagen_a_drive(service, file_buffer, nombre_archivo, parent_id, mime_type="image/jpeg"):
-    file_buffer.seek(0)
-    media = MediaIoBaseUpload(file_buffer, mimetype=mime_type, resumable=True)
-    return service.files().create(body={"name": nombre_archivo, "parents": [parent_id]}, media_body=media,
-        fields="id,name,webViewLink", supportsAllDrives=True).execute()
+    """Sube una imagen con reintentos breves ante errores temporales de Google Drive."""
+    ultimo_error = None
+    for intento in range(4):
+        try:
+            file_buffer.seek(0)
+            media = MediaIoBaseUpload(file_buffer, mimetype=mime_type, resumable=True)
+            return service.files().create(
+                body={"name": nombre_archivo, "parents": [parent_id]},
+                media_body=media,
+                fields="id,name,webViewLink",
+                supportsAllDrives=True,
+            ).execute()
+        except Exception as error:
+            ultimo_error = error
+            estado = getattr(getattr(error, "resp", None), "status", None)
+            temporal = estado in (408, 429, 500, 502, 503, 504)
+            if not temporal or intento == 3:
+                raise
+            espera = 2 ** (intento + 1)
+            print(f"Google Drive devolvió HTTP {estado}; reintento de subida {intento + 2}/4 en {espera}s.")
+            time.sleep(espera)
+    raise ultimo_error
 
 
 def mover_archivo_en_drive(service, file_id, carpeta_origen_id, carpeta_destino_id):
