@@ -130,9 +130,25 @@ def pesos(n): return "$" + f"{int(round(float(n))):,}".replace(",", ".")
 
 def crear_cartel_tres_precios(buffer_foto, nombre_producto, precios, porcentaje, detalle=""):
     """Crea un cartel que adapta el alto a entre 1 y 3 precios detectados."""
-    if buffer_foto is None: raise ValueError("Falta la foto del producto")
     precios = list(precios or [])[:3]
     if not precios: raise ValueError("No hay precios para mostrar")
+    if buffer_foto is None:
+        # Cartel original sin fotografía: fondo gráfico propio, sin inventar una foto de producto.
+        img = Image.new("RGB", (1200, 1200), (13, 24, 40))
+        draw = ImageDraw.Draw(img)
+        for yy in range(1200):
+            t = yy / 1199
+            color = (int(10 + 10 * t), int(22 + 12 * t), int(40 + 22 * t))
+            draw.line((0, yy, 1200, yy), fill=color)
+        draw.ellipse((-240, -220, 420, 440), fill=(18, 62, 91))
+        draw.ellipse((850, 760, 1450, 1360), fill=(17, 75, 64))
+        draw.rounded_rectangle((115, 250, 1085, 780), radius=48, fill=(19, 38, 59), outline=(104, 235, 178), width=5)
+        draw.text((600, 370), "OFERTA ESPECIAL", anchor="mm", font=_fuente(72, True), fill=(255, 214, 80))
+        draw.text((600, 485), "PRECIO DE CONTADO", anchor="mm", font=_fuente(46, True), fill=(255, 255, 255))
+        draw.text((600, 590), "CONSULTÁ DISPONIBILIDAD", anchor="mm", font=_fuente(32, True), fill=(104, 235, 178))
+        buffer_foto = io.BytesIO()
+        img.save(buffer_foto, "JPEG", quality=92)
+        buffer_foto.seek(0)
     buffer_foto.seek(0)
     img = ImageOps.exif_transpose(Image.open(buffer_foto)).convert("RGB")
     img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
