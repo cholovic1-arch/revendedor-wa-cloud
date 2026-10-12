@@ -165,7 +165,7 @@ def _precios_detectados(texto):
     for p in detectados:
         # Nunca usar automáticamente importes de cuotas o financiación.
         linea = str(p.get("linea", ""))
-        if re.search(r"financiad|cuotas?|tarjeta de cr[eé]dito|plan de pago|inter[eé]s", linea, re.I):
+        if re.search(r"financiad|cuotas?|tarjeta de cr[eé]dito|plan de pago|inter[eé]s", linea, re.I) and etiqueta.lower() not in ("efectivo", "contado", "cash"):
             continue
         try:
             valor = int(p.get("costo", 0))
