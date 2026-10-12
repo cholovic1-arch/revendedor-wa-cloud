@@ -109,12 +109,15 @@ def pesos(n): return "$" + f"{int(round(float(n))):,}".replace(",", ".")
 
 
 def texto_cartel(nombre, precios, porcentaje):
-    """Texto promocional para clientes; no revela el margen interno."""
-    filas = "\n".join(f"• {p['etiqueta']}: {pesos(p['venta'])}" for p in precios)
+    """Texto promocional; en lotes de proveedor muestra cada producto y su precio final."""
+    filas = "\n".join(
+        f"• {p.get('producto') or p['etiqueta']}: {pesos(p['venta'])}"
+        for p in precios
+    )
     return (
-        f"🔥 ¡OFERTA PARA APROVECHAR! 🔥\n\n"
-        f"🧊 {nombre}\n\n"
-        f"💰 PRECIO ESPECIAL: {filas}\n\n"
+        f"🔥 ¡OFERTAS PARA APROVECHAR! 🔥\n\n"
+        f"🛍️ {nombre}\n\n"
+        f"{filas}\n\n"
         "📦 Consultá stock y precio de envío por mensaje privado.\n"
         "📩 Escribinos para consultar o reservar."
     )
@@ -187,6 +190,31 @@ def _precios_detectados(texto):
         if len(resultado) == 3:
             break
     return resultado
+
+
+def _productos_de_texto_proveedor(texto):
+    """Lee listas de proveedor: una línea por producto y el precio de costo al final."""
+    encontrados = []
+    vistos = set()
+    patron = re.compile(
+        r"^\s*(?P<nombre>.*?[A-Za-zÁÉÍÓÚÜÑáéíóúüñ].*?)\s+\$?\s*"
+        r"(?P<importe>(?:\d{1,3}(?:[.,]\d{3}){1,2}|\d{5,}))\s*$"
+    )
+    for linea in (texto or "").splitlines():
+        limpia = linea.strip().strip("•-* ")
+        if not limpia or re.search(r"\b(total|subtotal|suma)\b", limpia, re.I):
+            continue
+        m = patron.match(limpia)
+        if not m:
+            continue
+        nombre = re.sub(r"\s+", " ", m.group("nombre")).strip(" -:;$")
+        importe = int(re.sub(r"\D", "", m.group("importe")) or "0")
+        # El total agregado del proveedor no tiene nombre de producto y queda excluido.
+        if len(nombre) < 3 or importe < 1000 or nombre.lower() in vistos:
+            continue
+        vistos.add(nombre.lower())
+        encontrados.append({"etiqueta": "Contado", "producto": nombre[:70], "costo": importe})
+    return encontrados[:6]
 
 
 def _precios_etiquetados(texto):
@@ -307,6 +335,21 @@ def _modificar(rec, chat_id, instruccion):
         rec["porcentaje"] = pct
         for p in rec["precios"]: p["venta"] = round(p["costo"] * (1 + pct / 100))
     else:
+        # Para promociones de varios productos, permitir corregir el precio final nombrando el producto.
+        importe_final = re.search(r"(\d[\d.,]*)\s*$", instruccion.strip())
+        if importe_final:
+            importe = int(re.sub(r"\D", "", importe_final.group(1)) or "0")
+            texto_producto = instruccion[:importe_final.start()].strip(" :=$-")
+            coincidencia = next(
+                (p for p in rec["precios"] if p.get("producto") and
+                 (p["producto"].lower() in texto_producto.lower() or
+                  texto_producto.lower() in p["producto"].lower())),
+                None
+            )
+            if coincidencia and importe > 0:
+                coincidencia["venta"] = importe
+                _regenerar(rec, chat_id)
+                return
         m = re.search(r"(lista|efectivo|contado|cash|transferencia|precio\s*[1-3]|mayorista|minorista)\D{0,20}(\d[\d.,]*)", instruccion, re.I)
         if not m:
             enviar_texto("No entendí el cambio. Escribí 35% para recalcular todo, o por ejemplo: efectivo 125000.", chat_id=chat_id)
@@ -473,13 +516,14 @@ def procesar_mensaje(msg):
         if 1000 <= importe <= 100_000_000:
             nombre_pendiente = pi.inferir_nombre_producto(pendiente.get("texto_ocr", ""))
             texto = f"Producto: {nombre_pendiente}\nEfectivo: {importe}"
+    productos_proveedor = _productos_de_texto_proveedor(texto) if sin_foto else []
     if sin_foto:
         tiene_producto = re.search(r"(?im)^\s*producto\s*:\s*.+$", texto)
         tiene_precio = re.search(
             r"(?im)^\s*(precio|contado|efectivo|transferencia|lista)\s*:\s*\$?\s*[\d.,]+\s*$",
             texto,
         )
-        if not (tiene_producto and tiene_precio):
+        if not productos_proveedor and not (tiene_producto and tiene_precio):
             enviar_texto(
                 "También podés crear un cartel sin foto. Enviá este formato:\n\n"
                 "Producto: Taladro\nPrecio: 125000\n\n"
@@ -490,8 +534,12 @@ def procesar_mensaje(msg):
             )
             return
     nombre_match = re.search(r"(?im)^\s*producto\s*:\s*(.+?)\s*$", texto)
-    nombre = nombre_match.group(1).strip()[:100] if nombre_match else pi.inferir_nombre_producto(texto)
-    detectados = _precios_detectados(texto)
+    if productos_proveedor:
+        nombre = "Ofertas del día" if len(productos_proveedor) > 1 else productos_proveedor[0]["producto"]
+        detectados = productos_proveedor
+    else:
+        nombre = nombre_match.group(1).strip()[:100] if nombre_match else pi.inferir_nombre_producto(texto)
+        detectados = _precios_detectados(texto)
     # El formato manual puede usar nombres propios como Precio, Lista, Efectivo o Transferencia.
     manuales = []
     for linea in texto.splitlines():
@@ -514,8 +562,12 @@ def procesar_mensaje(msg):
             chat_id=chat_id)
         return
     porcentaje = float(GANANCIA_PORCENTAJE)
-    precios = [{"etiqueta": p["etiqueta"], "costo": int(p["costo"]),
-                "venta": round(int(p["costo"]) * (1 + porcentaje / 100))} for p in detectados[:3]]
+    precios = [{
+        "etiqueta": p["etiqueta"],
+        "producto": p.get("producto", ""),
+        "costo": int(p["costo"]),
+        "venta": round(int(p["costo"]) * (1 + porcentaje / 100))
+    } for p in detectados[:6]]
     foto_id = pendiente.get("foto_id")
     if not foto_id and not sin_foto:
         enviar_texto("No encuentro la foto pendiente asociada. Subí las imágenes a 1_entrada y esperá el análisis.", chat_id=chat_id)
