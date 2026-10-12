@@ -113,6 +113,34 @@ def texto_cartel(nombre, precios, porcentaje):
     return f"{nombre}\n\nPRECIOS DE REVENTA (+{porcentaje:g}%):\n{filas}\n\nConsultá o reservá el tuyo."
 
 
+def publicar_en_facebook(rec):
+    """Publica el cartel aprobado como foto en la página configurada."""
+    page_id = os.environ.get("FACEBOOK_PAGE_ID", "").strip()
+    page_token = os.environ.get("FACEBOOK_PAGE_ACCESS_TOKEN", "").strip()
+    if not page_id or not page_token:
+        raise RuntimeError("Faltan los secretos FACEBOOK_PAGE_ID y FACEBOOK_PAGE_ACCESS_TOKEN en GitHub Actions.")
+    if not rec.get("output_id"):
+        raise RuntimeError("El borrador no tiene una imagen final guardada en Google Drive.")
+    service = pi.obtener_servicio_drive()
+    foto = pi.descargar_imagen_a_memoria(service, rec["output_id"])
+    foto.seek(0)
+    response = requests.post(
+        f"https://graph.facebook.com/v26.0/{page_id}/photos",
+        data={"caption": rec.get("caption", ""), "access_token": page_token},
+        files={"source": (rec.get("output_name") or "cartel.jpg", foto, "image/jpeg")},
+        timeout=90,
+    )
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if not response.ok or payload.get("error"):
+        error = payload.get("error", {})
+        detalle = error.get("message") or f"HTTP {response.status_code}"
+        raise RuntimeError(f"Facebook rechazó la publicación: {detalle}")
+    return payload.get("post_id") or payload.get("id") or ""
+
+
 def teclado(did):
     return {"inline_keyboard": [[
         {"text": "✅ Confirmar cartel", "callback_data": f"ok:{did}"},
@@ -129,6 +157,10 @@ def _precios_detectados(texto):
     # Respetar el orden en que aparecen los importes en el OCR; la etiqueta solo se usa
     # cuando el extractor encontró una asociación explícita/probable.
     for p in detectados:
+        # Nunca usar automáticamente importes de cuotas o financiación.
+        linea = str(p.get("linea", ""))
+        if re.search(r"financiad|cuotas?|tarjeta de cr[eé]dito|plan de pago|inter[eé]s", linea, re.I):
+            continue
         try:
             valor = int(p.get("costo", 0))
         except (TypeError, ValueError):
@@ -218,7 +250,8 @@ def _crear_borrador(service, lote, chat_id):
 
 def _regenerar(rec, chat_id):
     service = pi.obtener_servicio_drive()
-    foto = pi.descargar_imagen_a_memoria(service, rec["foto_drive_id"])
+    foto_id = rec.get("foto_drive_id")
+    foto = pi.descargar_imagen_a_memoria(service, foto_id) if foto_id else None
     cartel = pi.crear_cartel_tres_precios(foto, rec["nombre"], rec["precios"], rec["porcentaje"])
     filename = f"reventa_{rec['id']}_{uuid.uuid4().hex[:5]}.jpg"
     upload = pi.subir_imagen_a_drive(service, cartel, filename, ID_PUBLICAR)
@@ -266,9 +299,40 @@ def procesar_callback(cb):
     rec = state.get("drafts", {}).get(did)
     if not rec: enviar_texto("No encuentro ese borrador. Volvé a subir las imágenes a Drive.", chat_id=chat_id); return
     if action == "ok":
-        rec["estado"] = "aprobado_por_usuario"; rec["approved_at"] = int(time.time()); save_state()
-        _editar_caption(chat_id, msg.get("message_id"), "✅ CARTEL APROBADO\n\n" + rec.get("caption", ""))
-        enviar_texto("Cartel aprobado. La imagen está guardada en la carpeta de salida de Drive.\n\nNo se publicó en Facebook, Instagram ni WhatsApp porque esas integraciones no están conectadas. Los originales permanecen en 1_entrada.", chat_id=chat_id)
+        if rec.get("estado") == "publicado_facebook":
+            enviar_texto("Esta promoción ya figura como publicada en Facebook. No se volvió a publicar.", chat_id=chat_id)
+            return
+        if rec.get("estado") == "publicando_facebook":
+            enviar_texto("La publicación ya está en curso. Esperá el resultado antes de volver a intentarlo.", chat_id=chat_id)
+            return
+        rec["estado"] = "publicando_facebook"
+        rec["approved_at"] = rec.get("approved_at") or int(time.time())
+        save_state()
+        try:
+            post_id = publicar_en_facebook(rec)
+            rec["estado"] = "publicado_facebook"
+            rec["facebook_post_id"] = post_id
+            rec["published_at"] = int(time.time())
+            rec.pop("error_publicacion", None)
+            save_state()
+            _editar_caption(chat_id, msg.get("message_id"), "✅ PUBLICADO EN FACEBOOK\n\n" + rec.get("caption", ""))
+            enviar_texto(
+                "✅ La promoción se publicó correctamente en la página de Facebook.\n"
+                + (f"ID de publicación: {post_id}\n" if post_id else "")
+                + "Los originales permanecen en 1_entrada.",
+                chat_id=chat_id,
+            )
+        except Exception as e:
+            rec["estado"] = "error_publicacion_facebook"
+            rec["error_publicacion"] = str(e)[:500]
+            save_state()
+            log.exception("No se pudo publicar la promoción aprobada en Facebook")
+            enviar_texto(
+                "⚠️ El cartel fue aprobado, pero Facebook no confirmó la publicación. "
+                "No se marcará como publicado. Detalle: " + str(e)[:700]
+                + "\nCorregí la configuración indicada y volvé a tocar «Confirmar cartel» para reintentar.",
+                chat_id=chat_id,
+            )
     elif action == "edit":
         state.setdefault("waiting_edit", {})[chat_id] = did; save_state()
         enviar_texto("Escribí un porcentaje nuevo (ejemplo: 35%) para recalcular todos los precios, o un precio final específico (ejemplo: efectivo 125000).", chat_id=chat_id)
@@ -289,14 +353,25 @@ def procesar_mensaje(msg):
         did = state["waiting_edit"].pop(chat_id, None); save_state(); rec = state.get("drafts", {}).get(did)
         if not rec: enviar_texto("No encuentro el borrador para modificar.", chat_id=chat_id); return
         _modificar(rec, chat_id, texto); return
-    # Si el OCR había fallado, acepta de 1 a 3 precios manuales usando la foto pendiente.
+    # Acepta precios manuales asociados a una foto pendiente o un cartel creado desde cero.
     pendiente = state.get("pending_manual", {}).get(chat_id, {})
-    if not pendiente:
-        enviar_texto(
-            "No hay una foto pendiente para asociar estos precios. Subí la imagen a 1_entrada de Drive y esperá el análisis.\n\n"
-            "Podés mandar entre 1 y 3 precios; por ejemplo: Producto: Taladro\nPrecio: 125000",
-            chat_id=chat_id)
-        return
+    sin_foto = not bool(pendiente)
+    if sin_foto:
+        tiene_producto = re.search(r"(?im)^\s*producto\s*:\s*.+$", texto)
+        tiene_precio = re.search(
+            r"(?im)^\s*(precio|contado|efectivo|transferencia|lista)\s*:\s*\$?\s*[\d.,]+\s*$",
+            texto,
+        )
+        if not (tiene_producto and tiene_precio):
+            enviar_texto(
+                "También podés crear un cartel sin foto. Enviá este formato:\n\n"
+                "Producto: Taladro\nPrecio: 125000\n\n"
+                "O indicá el precio de contado/transferencia:\n"
+                "Producto: Amoladora\nEfectivo: 45000\nTransferencia: 47000\n\n"
+                "No uses precios financiados ni cuotas.",
+                chat_id=chat_id,
+            )
+            return
     nombre_match = re.search(r"(?im)^\s*producto\s*:\s*(.+?)\s*$", texto)
     nombre = nombre_match.group(1).strip()[:100] if nombre_match else pi.inferir_nombre_producto(texto)
     detectados = _precios_detectados(texto)
@@ -306,7 +381,10 @@ def procesar_mensaje(msg):
         m = re.match(r"\s*([A-Za-zÁÉÍÓÚÜÑáéíóúüñ ]{2,24})\s*:\s*\$?\s*([\d.,]+)\s*$", linea)
         if not m or m.group(1).strip().lower() == "producto":
             continue
-        etiqueta = re.sub(r"\s+", " ", m.group(1).strip()).title()
+        etiqueta_raw = re.sub(r"\s+", " ", m.group(1).strip())
+        if etiqueta_raw.lower() not in {"precio", "contado", "efectivo", "transferencia", "lista"}:
+            continue
+        etiqueta = "Efectivo" if etiqueta_raw.lower() == "contado" else etiqueta_raw.title()
         valor = int(re.sub(r"\D", "", m.group(2)) or "0")
         if valor > 0:
             manuales.append({"etiqueta": etiqueta, "costo": valor})
@@ -322,7 +400,7 @@ def procesar_mensaje(msg):
     precios = [{"etiqueta": p["etiqueta"], "costo": int(p["costo"]),
                 "venta": round(int(p["costo"]) * (1 + porcentaje / 100))} for p in detectados[:3]]
     foto_id = pendiente.get("foto_id")
-    if not foto_id:
+    if not foto_id and not sin_foto:
         enviar_texto("No encuentro la foto pendiente asociada. Subí las imágenes a 1_entrada y esperá el análisis.", chat_id=chat_id)
         return
     rec = {"id": uuid.uuid4().hex[:10], "nombre": nombre if nombre != "Producto" else "Producto",
@@ -333,7 +411,9 @@ def procesar_mensaje(msg):
     save_state()
     try:
         _regenerar(rec, chat_id)
-        state.get("pending_manual", {}).pop(chat_id, None); save_state()
+        if not sin_foto:
+            state.get("pending_manual", {}).pop(chat_id, None)
+        save_state()
     except Exception as e:
         log.exception("No pude crear cartel con precios manuales")
         enviar_texto(f"Error al crear el cartel: {e}. La foto pendiente se conserva para volver a intentarlo.", chat_id=chat_id)
