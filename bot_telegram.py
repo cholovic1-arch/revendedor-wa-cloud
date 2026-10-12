@@ -108,10 +108,16 @@ def enviar_foto(buffer, nombre, caption, keyboard=None, chat_id=None):
 def pesos(n): return "$" + f"{int(round(float(n))):,}".replace(",", ".")
 
 
+def formatear_precio(precio, valor):
+    moneda = str(precio.get("moneda", "ARS")).upper()
+    importe = f"{int(round(float(valor))):,}".replace(",", ".")
+    return f"USD {importe}" if moneda == "USD" else "$" + importe
+
+
 def texto_cartel(nombre, precios, porcentaje):
-    """Texto promocional; en lotes de proveedor muestra cada producto y su precio final."""
+    """Texto promocional; conserva moneda y productos del listado."""
     filas = "\n".join(
-        f"• {p.get('producto') or p['etiqueta']}: {pesos(p['venta'])}"
+        f"• {p.get('producto') or p['etiqueta']}: {formatear_precio(p, p['venta'])}"
         for p in precios
     )
     return (
@@ -193,28 +199,47 @@ def _precios_detectados(texto):
 
 
 def _productos_de_texto_proveedor(texto):
-    """Lee listas de proveedor: una línea por producto y el precio de costo al final."""
+    """Lee listas de proveedor con precios USD/ARS y aclaraciones después del precio."""
     encontrados = []
     vistos = set()
-    patron = re.compile(
-        r"^\s*(?P<nombre>.*?[A-Za-zÁÉÍÓÚÜÑáéíóúüñ].*?)\s+\$?\s*"
-        r"(?P<importe>(?:\d{1,3}(?:[.,]\d{3}){1,2}|\d{5,}))\s*$"
+    precio_patron = re.compile(
+        r"(?P<signo>US\$|U\$S|\$)?\s*"
+        r"(?P<importe>\d{1,3}(?:[.,]\d{3}){1,2}|\d{2,})"
+        r"\s*(?P<moneda>USD|US\$|U\$S|DÓLARES?|DOLARES?)?",
+        re.I
     )
     for linea in (texto or "").splitlines():
-        limpia = linea.strip().strip("•-* ")
+        limpia = re.sub(r"\s+", " ", linea).strip().strip("•-* ")
         if not limpia or re.search(r"\b(total|subtotal|suma)\b", limpia, re.I):
             continue
-        m = patron.match(limpia)
-        if not m:
+        if re.match(r"(?i)^\s*d[oó]lar\b", limpia):
             continue
-        nombre = re.sub(r"\s+", " ", m.group("nombre")).strip(" -:;$")
-        importe = int(re.sub(r"\D", "", m.group("importe")) or "0")
-        # El total agregado del proveedor no tiene nombre de producto y queda excluido.
-        if len(nombre) < 3 or importe < 1000 or nombre.lower() in vistos:
+        candidatos = []
+        for m in precio_patron.finditer(limpia):
+            valor = int(re.sub(r"\D", "", m.group("importe")) or "0")
+            moneda_txt = (m.group("moneda") or "").upper()
+            signo = (m.group("signo") or "").upper()
+            marcado = bool(signo or moneda_txt)
+            if valor > 0 and (marcado or valor >= 1000):
+                es_usd = moneda_txt in ("USD", "US$", "U$S", "DÓLAR", "DÓLARES", "DOLAR", "DOLARES") or signo in ("US$", "U$S")
+                candidatos.append((m, valor, "USD" if es_usd else "ARS", marcado))
+        marcados = [c for c in candidatos if c[3]]
+        if marcados:
+            elegido = marcados[-1]
+        else:
+            al_final = [c for c in candidatos if not limpia[c[0].end():].strip(" *).,:;")]
+            if not al_final:
+                continue
+            elegido = al_final[-1]
+        m, importe, moneda, _ = elegido
+        nombre = limpia[:m.start()].strip(" -:;$*")
+        nombre = re.sub(r"[*_]+", "", nombre)
+        nombre = re.sub(r"\s+", " ", nombre).strip(" -:;$")
+        if len(nombre) < 3 or nombre.lower() in vistos:
             continue
         vistos.add(nombre.lower())
-        encontrados.append({"etiqueta": "Contado", "producto": nombre[:70], "costo": importe})
-    return encontrados[:6]
+        encontrados.append({"etiqueta": "Contado", "producto": nombre[:100], "costo": importe, "moneda": moneda})
+    return encontrados[:18]
 
 
 def _precios_etiquetados(texto):
@@ -576,9 +601,32 @@ def procesar_mensaje(msg):
             chat_id=chat_id)
         return
     porcentaje = float(GANANCIA_PORCENTAJE)
+    if productos_proveedor and len(productos_proveedor) > 6:
+        grupos = [productos_proveedor[i:i + 6] for i in range(0, len(productos_proveedor), 6)]
+        ids_creados = []
+        for indice, grupo in enumerate(grupos, start=1):
+            precios_grupo = [{
+                "etiqueta": "Contado", "producto": p["producto"],
+                "moneda": p.get("moneda", "ARS"), "costo": int(p["costo"]),
+                "venta": round(int(p["costo"]) * (1 + porcentaje / 100))
+            } for p in grupo]
+            nombre_grupo = "Ofertas del día" if len(grupos) == 1 else f"Ofertas del día ({indice}/{len(grupos)})"
+            rec_grupo = {
+                "id": uuid.uuid4().hex[:10], "nombre": nombre_grupo,
+                "precios": precios_grupo, "porcentaje": porcentaje, "foto_drive_id": None,
+                "archivos_origen": [], "estado": "pendiente_revision",
+                "chat_id": chat_id, "created": int(time.time())
+            }
+            state.setdefault("drafts", {})[rec_grupo["id"]] = rec_grupo
+            ids_creados.append(rec_grupo["id"])
+        save_state()
+        for did_grupo in ids_creados:
+            _regenerar(state["drafts"][did_grupo], chat_id, nuevo=True)
+        return
     precios = [{
         "etiqueta": p["etiqueta"],
         "producto": p.get("producto", ""),
+        "moneda": p.get("moneda", "ARS"),
         "costo": int(p["costo"]),
         "venta": round(int(p["costo"]) * (1 + porcentaje / 100))
     } for p in detectados[:6]]
