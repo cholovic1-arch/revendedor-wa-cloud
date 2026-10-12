@@ -519,22 +519,22 @@ def procesar_mensaje(msg):
         try:
             foto_recibida = _guardar_imagen_telegram_en_drive(msg, chat_id)
             if foto_recibida:
+                # Toda foto queda en la cola de Drive para que el analizador de imágenes
+                # pueda asociar la foto limpia con la lista de precios. No pasar el caption
+                # al parser de texto: eso provocaba el falso mensaje "No pude leer ningún importe".
+                save_state()
                 if texto:
-                    state.setdefault("pending_drive", {}).pop(foto_recibida["id"], None)
-                    state.setdefault("processed_drive_ids", []).append(foto_recibida["id"])
-                    state["processed_drive_ids"] = list(dict.fromkeys(state["processed_drive_ids"]))[-3000:]
-                    state.setdefault("pending_manual", {})[chat_id] = {
-                        "foto_id": foto_recibida["id"], "nombres": [foto_recibida["name"]],
-                        "texto_ocr": texto[:8000], "precios_detectados": []
-                    }
-                    save_state()
-                    log.info("La foto con texto adjunto se asociará al borrador: %s", foto_recibida["name"])
+                    log.info("Foto con texto adjunto conservada en la cola de imágenes: %s", foto_recibida["name"])
+                    enviar_texto(
+                        f"Foto recibida y guardada en 1_entrada de Google Drive: {foto_recibida['name']}.\\n"
+                        "El texto adjunto no se procesará como un mensaje separado. Enviá la otra foto del mismo producto; analizaré el par y te enviaré un borrador para revisar antes de publicar.",
+                        chat_id=chat_id)
                 else:
                     enviar_texto(
-                        f"Foto recibida y guardada en 1_entrada de Google Drive: {foto_recibida['name']}.\n"
+                        f"Foto recibida y guardada en 1_entrada de Google Drive: {foto_recibida['name']}.\\n"
                         "Quedó registrada para procesar. Enviá la otra foto ahora; cuando termines, el sistema analizará el lote y te enviará el borrador con botones para revisar antes de publicar.",
                         chat_id=chat_id)
-                    return
+                return
         except Exception as e:
             log.exception("No pude guardar en Drive una imagen recibida por Telegram")
             enviar_texto(f"No pude guardar la foto en 1_entrada de Google Drive: {e}. No se inició el análisis; podés volver a enviarla.", chat_id=chat_id)
