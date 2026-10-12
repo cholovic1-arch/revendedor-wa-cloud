@@ -1,0 +1,20 @@
+name: Validar sintaxis Python
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+jobs:
+  syntax:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validar sintaxis de los módulos
+        run: python -m py_compile bot_telegram.py procesar_imagenes.py config.py run_cloud_once.py
