@@ -535,14 +535,14 @@ def vigilar_drive_una_vez():
     # Una sola relectura automática de lotes que el OCR anterior dejó pendientes manuales.
     # Permite que la corrección del OCR procese las fotos ya recibidas sin pedir que se reenvíen.
     for chat_manual, manual in state.get("pending_manual", {}).items():
-        if manual.get("auto_retry_ocr_v2"):
+        if manual.get("auto_retry_ocr_v3"):
             continue
         nombres_manual = set(manual.get("nombres", []))
         coincidentes = [f for f in files if f.get("name") in nombres_manual]
         if coincidentes:
             for f in coincidentes:
                 pending.setdefault(f["id"], {"file": f, "first_seen": now, "last_seen": now, "attempts": 0, "next_retry": 0})
-            manual["auto_retry_ocr_v2"] = True
+            manual["auto_retry_ocr_v3"] = True
             log.info("Reintentando una vez el OCR corregido para el lote manual de %s.", chat_manual)
     state["seen_drive_ids"] = list(seen)[-1500:]
     save_state()
