@@ -230,7 +230,7 @@ def _crear_borrador(service, lote, chat_id):
     if not detectados:
         state.setdefault("pending_manual", {})[str(chat_id)] = {
             "foto_id": foto_id, "nombres": nombres, "texto_ocr": texto_ocr[:8000],
-            "precios_detectados": [], "auto_retry_ocr_v2": True
+            "precios_detectados": [], "auto_retry_ocr_v2": False
         }
         save_state()
         enviar_texto(
