@@ -173,7 +173,7 @@ def crear_cartel_tres_precios(buffer_foto, nombre_producto, precios, porcentaje,
         valor = pesos(p["venta"]); f = _fuente(max(25, ancho // 32), True); bbox = d.textbbox((0,0), valor, font=f)
         d.text((ancho - (bbox[2]-bbox[0]) - 44, yy + 11), valor, font=f, fill=(255,214,80))
         yy += alto_fila
-    d.text((28, canvas.height - 52), "CONSULTÁ O RESERVÁ EL TUYO", font=_fuente(max(18, ancho // 47), True), fill=(255,255,255))
+    d.text((28, canvas.height - 52), "CONSULTÁ STOCK Y PRECIO DE ENVÍO", font=_fuente(max(16, ancho // 52), True), fill=(255,255,255))
     out = io.BytesIO(); canvas.save(out, "JPEG", quality=94, optimize=True); out.seek(0); return out
 
 
@@ -190,73 +190,75 @@ def etiquetar_precio(linea):
 
 
 def extraer_precios(texto):
-    """Extrae importes y asigna la etiqueta por proximidad, no solo por la misma línea OCR."""
+    """Lee precios argentinos tolerando errores OCR en separadores de miles."""
     texto = (texto or "").replace("\u00a0", " ")
-    # Admite formatos 145.000, 145,000, 145000 y números con símbolo monetario.
-    patron = re.compile(r"(?<!\d)(?:\d{1,3}(?:[.,]\d{3}){1,2}|\d{5,9})(?!\d)")
-    salida, vistos = [], set()
+    patron = re.compile(r"(?<!\d)\d{1,3}(?:[.,:'’´\s]\d{3}){1,2}(?!\d)|(?<!\d)\d{5,9}(?!\d)")
     etiquetas = [
-        ("Transferencia", re.compile(r"transferencia|transfer|transf\.?", re.I)),
+        ("Transferencia", re.compile(r"transferencia|transfer|transf\.?|transfere[nm]cia", re.I)),
         ("Efectivo", re.compile(r"valor\s+efectivo|efectivo|contado|cash", re.I)),
-        ("Lista", re.compile(r"precio\s+de\s+lista|lista|tarjeta\s+de\s+cr[eé]dito|precio\s+regular", re.I)),
+        ("Lista", re.compile(r"precio\s+de\s+lista|lista|tarjeta\s*de\s*cr[eé]dito|precio\s+regular", re.I)),
         ("Mayorista", re.compile(r"mayorista|por\s+mayor", re.I)),
         ("Minorista", re.compile(r"minorista|por\s+menor", re.I)),
         ("Costo", re.compile(r"costo|proveedor", re.I)),
     ]
+    salida, vistos = [], set()
     for m in patron.finditer(texto):
-        raw = m.group(0)
+        raw = m.group(0).strip()
         valor = int(re.sub(r"\D", "", raw) or "0")
         if not 1000 <= valor <= 100_000_000:
             continue
-        # Ignorar medidas/cantidades sin contexto monetario.
-        previo = texto[max(0, m.start()-8):m.start()]
-        despues = texto[m.end():min(len(texto), m.end()+8)]
-        inicio = max(0, m.start()-130)
-        fin = min(len(texto), m.end()+100)
+        previo = texto[max(0, m.start()-12):m.start()]
+        despues = texto[m.end():min(len(texto), m.end()+12)]
+        inicio = max(0, m.start()-180)
+        fin = min(len(texto), m.end()+130)
         contexto = texto[inicio:fin]
-        linea_inicio = texto.rfind("\n", 0, m.start()) + 1
-        linea_fin = texto.find("\n", m.end())
-        if linea_fin < 0: linea_fin = len(texto)
-        linea = texto[linea_inicio:linea_fin].strip()
-        # Los importes con separador de miles, $ o contexto comercial son candidatos válidos.
-        if not ("$" in previo or re.search(r"precio|costo|efectivo|transfer|lista|contado|valor|ars|mayorista|minorista", contexto, re.I) or "." in raw or "," in raw):
+        li = texto.rfind("\n", 0, m.start()) + 1
+        lf = texto.find("\n", m.end())
+        if lf < 0: lf = len(texto)
+        linea = texto[li:lf].strip()
+        if not ("$" in previo + despues or re.search(
+            r"precio|costo|efectivo|transfer|lista|contado|valor|ars|mayorista|minorista", contexto, re.I
+        ) or re.search(r"[.,:'’´\s]", raw)):
             continue
         etiqueta = "Sin identificar"
-        # Elegir la etiqueta más cercana al importe dentro de la ventana de contexto.
         mejor = None
         for nombre, rx in etiquetas:
             for lab in rx.finditer(contexto):
-                abs_pos = inicio + lab.start()
-                distancia = abs(abs_pos - m.start())
-                # Penalizar un poco las menciones que quedan después del importe.
-                score = distancia + (12 if abs_pos > m.start() else 0)
-                if mejor is None or score < mejor[0]:
-                    mejor = (score, nombre)
-        if mejor and mejor[0] <= 115:
+                pos = inicio + lab.start()
+                distancia = abs(pos - m.start()) + (12 if pos > m.start() else 0)
+                if mejor is None or distancia < mejor[0]:
+                    mejor = (distancia, nombre)
+        if mejor and mejor[0] <= 160:
             etiqueta = mejor[1]
         else:
-            etiqueta = etiquetar_precio(linea)
-        clave = (valor, etiqueta)
-        if clave in vistos:
-            continue
-        vistos.add(clave)
-        salida.append({"costo": valor, "etiqueta": etiqueta, "linea": linea or contexto.strip()})
-    # Si distintas lecturas OCR duplican un mismo importe, conservar una sola ocurrencia por valor.
-    unicos, importes = [], set()
-    for item in salida:
-        if item["costo"] in importes:
-            continue
-        importes.add(item["costo"])
-        unicos.append(item)
-    return unicos[:20]
-
+            lowline = linea.lower()
+            if re.search(r"efectivo|contado|cash", lowline): etiqueta = "Efectivo"
+            elif re.search(r"transfer", lowline): etiqueta = "Transferencia"
+            elif re.search(r"lista", lowline): etiqueta = "Lista"
+        if valor not in vistos:
+            salida.append({"costo": valor, "etiqueta": etiqueta, "linea": linea or contexto.strip()})
+            vistos.add(valor)
+    return salida[:20]
 
 def inferir_nombre_producto(texto):
-    ignorar = ("precio", "costo", "efectivo", "transfer", "lista", "contado", "www", "http", "oferta", "mayorista", "minorista")
-    for linea in (texto or "").splitlines():
-        l = re.sub(r"\s+", " ", linea).strip(" -*•\t")
-        if len(l) < 4 or any(k in l.lower() for k in ignorar) or re.fullmatch(r"[\d$.,\s:/-]+", l): continue
-        l = re.sub(r"(?<!\w)\$?\s*(?:\d{1,3}(?:[.,]\d{3}){1,2}|\d{5,9})(?!\w)", "", l)
-        l = re.sub(r"\s+", " ", l).strip(" -:;,. ")
-        if len(l) >= 3: return l[:100]
+    """Prioriza nombre/modelo del producto frente a slogans publicitarios del folleto."""
+    lineas = [re.sub(r"\s+", " ", x).strip(" -*•\t|=<>") for x in (texto or "").splitlines()]
+    ignorar = ("precio", "costo", "efectivo", "transfer", "lista", "contado", "www", "http",
+               "oferta", "mayorista", "minorista", "creciendo día a día", "ideal para familias",
+               "fácil acceso", "mejor organización", "optimiza el espacio", "rendimiento constante",
+               "diseño robusto", "se integra", "mantiene los alimentos", "gran capacidad")
+    for linea in lineas:
+        if re.search(r"\b[A-Z]{1,5}[- ]?\d{2,6}[A-Z]?\b", linea, re.I) and not re.search(r"\$", linea):
+            modelo = re.search(r"\b[A-Z]{1,5}[- ]?\d{2,6}[A-Z]?\b", linea, re.I).group(0).replace(" ", "")
+            categoria = next((x for x in lineas if re.search(r"freezer|heladera|lavarropa|cocina|microondas|televisor|parrilla|taladro|amoladora", x, re.I)), "")
+            return (categoria.title() + " " + modelo).strip()[:100] if categoria else modelo
+    for linea in lineas:
+        low = linea.lower()
+        if len(linea) < 4 or any(k in low for k in ignorar) or re.fullmatch(r"[\d$.,\s:/-]+", linea):
+            continue
+        if re.search(r"\b\d+\s*(litros|lts|ltrs)\b", low): continue
+        limpia = re.sub(r"(?<!\w)\$?\s*\d{1,3}(?:[.,:'’´\s]\d{3}){1,2}(?!\w)", "", linea)
+        limpia = re.sub(r"\s+", " ", limpia).strip(" -:;,. ")
+        if len(limpia) >= 3: return limpia[:100]
     return "Producto"
+
