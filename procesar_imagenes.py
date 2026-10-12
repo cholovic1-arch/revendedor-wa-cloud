@@ -190,63 +190,98 @@ def etiquetar_precio(linea):
 
 
 def extraer_precios(texto):
-    """Lee precios argentinos tolerando errores OCR en separadores de miles."""
+    """Extrae importes argentinos y los asocia a su modalidad sin mezclar etiquetas lejanas."""
     texto = (texto or "").replace("\u00a0", " ")
-    patron = re.compile(r"(?<!\d)\d{1,3}(?:[.,:'’´\s]\d{3}){1,2}(?!\d)|(?<!\d)\d{5,9}(?!\d)")
+    patron = re.compile(r"(?<!\d)\d{1,3}(?:[.,:'’´\s][0-9Oo]{3}){1,2}(?!\d)|(?<!\d)\d[0-9Oo]{4,8}(?!\d)")
     etiquetas = [
         ("Transferencia", re.compile(r"transferencia|transfer|transf\.?|transfere[nm]cia", re.I)),
         ("Efectivo", re.compile(r"valor\s+efectivo|efectivo|contado|cash", re.I)),
-        ("Lista", re.compile(r"precio\s+de\s+lista|lista|tarjeta\s*de\s*cr[eé]dito|precio\s+regular", re.I)),
+        ("Lista", re.compile(r"precio\s+de\s+lista|lista|tarjeta\s*de\s+cr[eé]dito|precio\s+regular", re.I)),
         ("Mayorista", re.compile(r"mayorista|por\s+mayor", re.I)),
         ("Minorista", re.compile(r"minorista|por\s+menor", re.I)),
         ("Costo", re.compile(r"costo|proveedor", re.I)),
     ]
     salida, vistos = [], set()
+    lineas = texto.splitlines()
+    offsets, total = [], 0
+    for linea in lineas:
+        offsets.append((total, total + len(linea), linea))
+        total += len(linea) + 1
     for m in patron.finditer(texto):
         raw = m.group(0).strip()
-        valor = int(re.sub(r"\D", "", raw) or "0")
+        valor = int(re.sub(r"\D", "", raw.replace("O", "0").replace("o", "0")) or "0")
         if not 1000 <= valor <= 100_000_000:
             continue
-        previo = texto[max(0, m.start()-12):m.start()]
-        despues = texto[m.end():min(len(texto), m.end()+12)]
-        inicio = max(0, m.start()-180)
-        fin = min(len(texto), m.end()+130)
-        contexto = texto[inicio:fin]
-        li = texto.rfind("\n", 0, m.start()) + 1
-        lf = texto.find("\n", m.end())
-        if lf < 0: lf = len(texto)
-        linea = texto[li:lf].strip()
+        previo = texto[max(0, m.start()-8):m.start()]
+        despues = texto[m.end():min(len(texto), m.end()+8)]
+        cerca = texto[max(0, m.start()-80):min(len(texto), m.end()+80)]
         if not ("$" in previo + despues or re.search(
-            r"precio|costo|efectivo|transfer|lista|contado|valor|ars|mayorista|minorista", contexto, re.I
+            r"precio|costo|efectivo|transfer|lista|contado|valor|ars|mayorista|minorista|combo",
+            cerca, re.I
         ) or re.search(r"[.,:'’´\s]", raw)):
             continue
+        linea_actual = linea_previa = linea_siguiente = ""
+        inicio_linea = 0
+        for idx, (ini, fin, linea) in enumerate(offsets):
+            if ini <= m.start() <= fin:
+                linea_actual = linea
+                inicio_linea = ini
+                linea_previa = offsets[idx-1][2] if idx > 0 else ""
+                linea_siguiente = offsets[idx+1][2] if idx + 1 < len(offsets) else ""
+                break
         etiqueta = "Sin identificar"
         mejor = None
-        for nombre, rx in etiquetas:
-            for lab in rx.finditer(contexto):
-                pos = inicio + lab.start()
-                distancia = abs(pos - m.start()) + (12 if pos > m.start() else 0)
+        for nivel, linea in enumerate((linea_actual, linea_previa, linea_siguiente)):
+            if not linea:
+                continue
+            for nombre, rx in etiquetas:
+                lab = rx.search(linea)
+                if not lab:
+                    continue
+                if nivel == 0:
+                    distancia = abs(lab.start() - (m.start() - inicio_linea))
+                elif nivel == 1:
+                    distancia = 35 + len(linea) - lab.start()
+                else:
+                    distancia = 35 + lab.start()
                 if mejor is None or distancia < mejor[0]:
                     mejor = (distancia, nombre)
-        if mejor and mejor[0] <= 160:
+        if mejor and mejor[0] <= 100:
             etiqueta = mejor[1]
-        else:
-            lowline = linea.lower()
-            if re.search(r"efectivo|contado|cash", lowline): etiqueta = "Efectivo"
-            elif re.search(r"transfer", lowline): etiqueta = "Transferencia"
-            elif re.search(r"lista", lowline): etiqueta = "Lista"
+        li = texto.rfind("\n", 0, m.start()) + 1
+        lf = texto.find("\n", m.end())
+        if lf < 0:
+            lf = len(texto)
+        linea = texto[li:lf].strip()
         if valor not in vistos:
-            salida.append({"costo": valor, "etiqueta": etiqueta, "linea": linea or contexto.strip()})
+            salida.append({"costo": valor, "etiqueta": etiqueta, "linea": linea or raw})
             vistos.add(valor)
-    return salida[:20]
+    return salida[:30]
 
 def inferir_nombre_producto(texto):
-    """Prioriza nombre/modelo del producto frente a slogans publicitarios del folleto."""
+    """Prioriza el nombre comercial y reconoce combos antes que códigos aislados."""
     lineas = [re.sub(r"\s+", " ", x).strip(" -*•\t|=<>") for x in (texto or "").splitlines()]
     ignorar = ("precio", "costo", "efectivo", "transfer", "lista", "contado", "www", "http",
                "oferta", "mayorista", "minorista", "creciendo día a día", "ideal para familias",
                "fácil acceso", "mejor organización", "optimiza el espacio", "rendimiento constante",
                "diseño robusto", "se integra", "mantiene los alimentos", "gran capacidad")
+    for i, linea in enumerate(lineas):
+        if re.search(r"\bcombo\b", linea, re.I):
+            limpia = re.sub(r"(?<!\w)\$?\s*\d{1,3}(?:[.,:'’´\s]\d{3}){1,2}(?!\w)", "", linea)
+            limpia = re.sub(r"\s+", " ", limpia).strip(" -:;,. ")
+            if len(limpia) >= 7 and not re.fullmatch(r"combo", limpia, re.I):
+                return limpia[:100]
+            partes = ["Combo"]
+            for candidata in lineas[i+1:i+4]:
+                low = candidata.lower()
+                if not candidata or any(k in low for k in ignorar) or re.search(r"\$?\s*\d[\d.,:'’´ ]{3,}", candidata):
+                    continue
+                if re.fullmatch(r"[\d$.,\s:/-]+", candidata):
+                    continue
+                partes.append(candidata)
+                if len(" ".join(partes)) >= 65:
+                    break
+            return " ".join(partes)[:100] if len(partes) > 1 else "Combo de artículos"
     for linea in lineas:
         if re.search(r"\b[A-Z]{1,5}[- ]?\d{2,6}[A-Z]?\b", linea, re.I) and not re.search(r"\$", linea):
             modelo = re.search(r"\b[A-Z]{1,5}[- ]?\d{2,6}[A-Z]?\b", linea, re.I).group(0).replace(" ", "")
@@ -256,9 +291,11 @@ def inferir_nombre_producto(texto):
         low = linea.lower()
         if len(linea) < 4 or any(k in low for k in ignorar) or re.fullmatch(r"[\d$.,\s:/-]+", linea):
             continue
-        if re.search(r"\b\d+\s*(litros|lts|ltrs)\b", low): continue
+        if re.search(r"\b\d+\s*(litros|lts|ltrs)\b", low):
+            continue
         limpia = re.sub(r"(?<!\w)\$?\s*\d{1,3}(?:[.,:'’´\s]\d{3}){1,2}(?!\w)", "", linea)
         limpia = re.sub(r"\s+", " ", limpia).strip(" -:;,. ")
-        if len(limpia) >= 3: return limpia[:100]
+        if len(limpia) >= 3:
+            return limpia[:100]
     return "Producto"
 
