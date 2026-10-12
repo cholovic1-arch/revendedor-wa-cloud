@@ -228,7 +228,7 @@ def _crear_borrador(service, lote, chat_id):
     if not detectados:
         state.setdefault("pending_manual", {})[str(chat_id)] = {
             "foto_id": foto_id, "nombres": nombres, "texto_ocr": texto_ocr[:8000],
-            "precios_detectados": []
+            "precios_detectados": [], "auto_retry_ocr_v2": True
         }
         save_state()
         enviar_texto(
@@ -254,6 +254,7 @@ def _crear_borrador(service, lote, chat_id):
            "output_name": filename, "estado": "pendiente_revision", "chat_id": str(chat_id),
            "caption": texto_cartel(nombre, precios, porcentaje), "created": int(time.time())}
     state.setdefault("drafts", {})[did] = rec
+    state.get("pending_manual", {}).pop(str(chat_id), None)
     save_state()
     cartel.seek(0)
     enviar_foto(cartel, filename, rec["caption"], teclado(did), chat_id)
@@ -523,6 +524,18 @@ def vigilar_drive_una_vez():
         if fid not in seen:
             pending.setdefault(fid, {"file": f, "first_seen": now, "last_seen": now, "attempts": 0, "next_retry": 0})
             seen.add(fid)
+    # Una sola relectura automática de lotes que el OCR anterior dejó pendientes manuales.
+    # Permite que la corrección del OCR procese las fotos ya recibidas sin pedir que se reenvíen.
+    for chat_manual, manual in state.get("pending_manual", {}).items():
+        if manual.get("auto_retry_ocr_v2"):
+            continue
+        nombres_manual = set(manual.get("nombres", []))
+        coincidentes = [f for f in files if f.get("name") in nombres_manual]
+        if coincidentes:
+            for f in coincidentes:
+                pending.setdefault(f["id"], {"file": f, "first_seen": now, "last_seen": now, "attempts": 0, "next_retry": 0})
+            manual["auto_retry_ocr_v2"] = True
+            log.info("Reintentando una vez el OCR corregido para el lote manual de %s.", chat_manual)
     state["seen_drive_ids"] = list(seen)[-1500:]
     save_state()
     if not pending:
