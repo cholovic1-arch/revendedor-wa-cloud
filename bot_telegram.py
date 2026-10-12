@@ -447,6 +447,12 @@ def procesar_mensaje(msg):
     # Acepta precios manuales asociados a una foto pendiente o un cartel creado desde cero.
     pendiente = state.get("pending_manual", {}).get(chat_id, {})
     sin_foto = not bool(pendiente)
+    # Si se pidió aclaración y se responde con un número solo, tomarlo como precio contado.
+    if pendiente and re.fullmatch(r"\s*\$?\s*\d[\d.,:'’´\s]*\s*", texto):
+        importe = int(re.sub(r"\D", "", texto) or "0")
+        if 1000 <= importe <= 100_000_000:
+            nombre_pendiente = pi.inferir_nombre_producto(pendiente.get("texto_ocr", ""))
+            texto = f"Producto: {nombre_pendiente}\nEfectivo: {importe}"
     if sin_foto:
         tiene_producto = re.search(r"(?im)^\s*producto\s*:\s*.+$", texto)
         tiene_precio = re.search(
