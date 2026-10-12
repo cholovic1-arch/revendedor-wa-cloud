@@ -243,11 +243,11 @@ def _crear_borrador(service, lote, chat_id):
         # Si este lote ya fue reintentado con la versión actual del OCR,
         # conservar esa marca para evitar reintentos y avisos repetidos.
         reintento_ocr_ya_realizado = bool(
-            state.get("pending_manual", {}).get(str(chat_id), {}).get("auto_retry_ocr_v3")
+            state.get("pending_manual", {}).get(str(chat_id), {}).get("auto_retry_ocr_v4")
         )
         state.setdefault("pending_manual", {})[str(chat_id)] = {
             "foto_id": foto_id, "nombres": nombres, "texto_ocr": texto_ocr[:8000],
-            "precios_detectados": [], "auto_retry_ocr_v3": reintento_ocr_ya_realizado
+            "precios_detectados": [], "auto_retry_ocr_v4": reintento_ocr_ya_realizado
         }
         save_state()
         enviar_texto(
@@ -552,15 +552,17 @@ def vigilar_drive_una_vez():
     # Una sola relectura automática de lotes que el OCR anterior dejó pendientes manuales.
     # Permite que la corrección del OCR procese las fotos ya recibidas sin pedir que se reenvíen.
     for chat_manual, manual in state.get("pending_manual", {}).items():
-        if manual.get("auto_retry_ocr_v3"):
+        # Versión v4: recuperar fotos de lotes antiguos aunque hayan quedado marcadas
+        # como reintentadas por versiones previas. No repetir después de esta recuperación.
+        if manual.get("auto_retry_ocr_v4"):
             continue
         nombres_manual = set(manual.get("nombres", []))
         coincidentes = [f for f in files if f.get("name") in nombres_manual]
         if coincidentes:
             for f in coincidentes:
                 pending.setdefault(f["id"], {"file": f, "first_seen": now, "last_seen": now, "attempts": 0, "next_retry": 0})
-            manual["auto_retry_ocr_v3"] = True
-            log.info("Reintentando una vez el OCR corregido para el lote manual de %s.", chat_manual)
+            manual["auto_retry_ocr_v4"] = True
+            log.info("Recuperación v4: reencolando %s foto(s) del lote pendiente de %s.", len(coincidentes), chat_manual)
     state["seen_drive_ids"] = list(seen)[-1500:]
     save_state()
     if not pending:
