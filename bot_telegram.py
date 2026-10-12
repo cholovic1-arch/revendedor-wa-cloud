@@ -109,8 +109,15 @@ def pesos(n): return "$" + f"{int(round(float(n))):,}".replace(",", ".")
 
 
 def texto_cartel(nombre, precios, porcentaje):
+    """Texto promocional para clientes; nunca revela el margen interno del revendedor."""
     filas = "\n".join(f"• {p['etiqueta']}: {pesos(p['venta'])}" for p in precios)
-    return f"{nombre}\n\nPRECIOS DE REVENTA (+{porcentaje:g}%):\n{filas}\n\nConsultá o reservá el tuyo."
+    return (
+        f"🔥 ¡OFERTA PARA APROVECHAR! 🔥\n\n"
+        f"🛍️ {nombre}\n\n"
+        f"💰 PRECIOS ESPECIALES:\n{filas}\n\n"
+        "📩 Escribinos por mensaje privado para consultar o reservar.\n"
+        "📦 Consultá disponibilidad."
+    )
 
 
 def publicar_en_facebook(rec):
