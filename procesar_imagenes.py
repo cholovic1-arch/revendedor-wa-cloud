@@ -164,7 +164,7 @@ def crear_cartel_tres_precios(buffer_foto, nombre_producto, precios, porcentaje,
     d.rectangle((0, y, ancho, canvas.height), fill=(13, 24, 40))
     titulo = str(nombre_producto or "Producto")[:80]
     d.text((28, y + 12), titulo, font=_fuente(max(27, ancho // 29), True), fill=(255,255,255))
-    d.text((30, y + 55), f"PRECIOS DE REVENTA · MARGEN {porcentaje:g}%", font=_fuente(max(17, ancho // 52), True), fill=(104,235,178))
+    d.text((30, y + 55), "PRECIOS ESPECIALES", font=_fuente(max(17, ancho // 52), True), fill=(104,235,178))
     yy = y + cabecera
     for p in precios:
         d.rounded_rectangle((24, yy, ancho - 24, yy + alto_fila - 8), radius=13, fill=(29,48,70), outline=(67,92,119), width=2)
