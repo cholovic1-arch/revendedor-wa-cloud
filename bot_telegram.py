@@ -143,7 +143,7 @@ def publicar_en_facebook(rec):
 
 def teclado(did):
     return {"inline_keyboard": [[
-        {"text": "✅ Confirmar cartel", "callback_data": f"ok:{did}"},
+        {"text": "📣 Publicar en Facebook", "callback_data": f"ok:{did}"},
         {"text": "✏️ Modificar", "callback_data": f"edit:{did}"},
         {"text": "❌ Cancelar", "callback_data": f"cancel:{did}"}
     ]]}
@@ -343,18 +343,18 @@ def procesar_callback(cb):
 
 
 def _guardar_imagen_telegram_en_drive(msg, chat_id):
-    """Descarga una foto recibida por Telegram y la copia a 1_entrada de Drive."""
+    """Descarga la imagen de Telegram, la guarda en 1_entrada y la registra como pendiente."""
     foto = None
     nombre = None
     mime_type = "image/jpeg"
     if msg.get("photo"):
-        foto = msg["photo"][-1]  # Telegram entrega primero las miniaturas y al final la mayor.
+        foto = msg["photo"][-1]
         nombre = f"telegram_{int(time.time())}_{foto.get('file_unique_id', uuid.uuid4().hex)}.jpg"
     else:
         documento = msg.get("document") or {}
         mime = str(documento.get("mime_type", "")).lower()
         if not mime.startswith("image/"):
-            return False
+            return None
         foto = documento
         extension = Path(str(documento.get("file_name") or "imagen.jpg")).suffix.lower()
         if extension not in (".jpg", ".jpeg", ".png", ".webp"):
@@ -362,7 +362,7 @@ def _guardar_imagen_telegram_en_drive(msg, chat_id):
         nombre = f"telegram_{int(time.time())}_{documento.get('file_unique_id', uuid.uuid4().hex)}{extension}"
         mime_type = mime or "image/jpeg"
     if not foto:
-        return False
+        return None
     file_id = foto.get("file_id")
     if not file_id:
         raise RuntimeError("Telegram no entregó el identificador de la imagen.")
@@ -379,9 +379,21 @@ def _guardar_imagen_telegram_en_drive(msg, chat_id):
     buffer = io.BytesIO(descarga.content)
     service = pi.obtener_servicio_drive()
     subida = pi.subir_imagen_a_drive(service, buffer, nombre, ID_ENTRADA, mime_type=mime_type)
-    log.info("Foto recibida por Telegram guardada en 1_entrada de Drive: %s (%s)", nombre, subida.get("id", "sin ID"))
+    file_meta = {"id": subida["id"], "name": subida.get("name", nombre), "mimeType": mime_type}
+    ahora = time.time()
+    # Registrar el archivo en el estado de trabajo de inmediato: el procesamiento no depende
+    # de que otro escaneo llegue a descubrirlo en Drive.
+    state.setdefault("pending_drive", {})[file_meta["id"]] = {
+        "file": file_meta, "first_seen": ahora, "last_seen": ahora,
+        "attempts": 0, "next_retry": 0
+    }
+    seen = state.setdefault("seen_drive_ids", [])
+    if file_meta["id"] not in seen:
+        seen.append(file_meta["id"])
+    state["seen_drive_ids"] = seen[-1500:]
+    save_state()
+    log.info("Foto recibida por Telegram guardada y registrada para procesar: %s (%s)", nombre, file_meta["id"])
     return nombre
-
 
 def procesar_mensaje(msg):
     chat_id = str(msg.get("chat", {}).get("id", ""))
@@ -398,8 +410,7 @@ def procesar_mensaje(msg):
             if nombre:
                 enviar_texto(
                     f"Foto recibida y guardada en 1_entrada de Google Drive: {nombre}.\n"
-                    "La estoy incorporando al lote; enviá las demás fotos enseguida. "
-                    "Cuando termine la carga, analizaré el producto y los precios y te mandaré el borrador para revisar.",
+                    "Quedó registrada para procesar. Enviá la otra foto ahora; cuando termines, el sistema analizará el lote y te enviará el cartel para publicar, modificar o cancelar.",
                     chat_id=chat_id)
                 return
         except Exception as e:
