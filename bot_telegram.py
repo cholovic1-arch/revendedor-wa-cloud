@@ -312,7 +312,7 @@ def _crear_borrador(service, lote, chat_id):
         "Todavía no se publicó. Usá Publicar, Modificar o Cancelar. Los originales siguen en 1_entrada.",
         chat_id=chat_id)
 
-def _regenerar(rec, chat_id):
+def _regenerar(rec, chat_id, nuevo=False):
     service = pi.obtener_servicio_drive()
     foto_id = rec.get("foto_drive_id")
     foto = pi.descargar_imagen_a_memoria(service, foto_id) if foto_id else None
@@ -323,7 +323,10 @@ def _regenerar(rec, chat_id):
     rec["caption"] = texto_cartel(rec["nombre"], rec["precios"], rec["porcentaje"])
     rec["estado"] = "pendiente_revision"; save_state(); cartel.seek(0)
     enviar_foto(cartel, filename, rec["caption"], teclado(rec["id"]), chat_id)
-    enviar_texto("Cartel actualizado. Revisá la imagen nueva y volvé a confirmar, modificar o cancelar.", chat_id=chat_id)
+    if nuevo:
+        enviar_texto("BORRADOR LISTO PARA REVISAR. La imagen está preparada, todavía no se publicó en Facebook. Usá Publicar, Modificar o Cancelar en los botones del cartel.", chat_id=chat_id)
+    else:
+        enviar_texto("Cartel actualizado. Revisá la imagen nueva y volvé a confirmar, modificar o cancelar.", chat_id=chat_id)
 
 
 def _modificar(rec, chat_id, instruccion):
@@ -474,7 +477,7 @@ def _guardar_imagen_telegram_en_drive(msg, chat_id):
     state["seen_drive_ids"] = seen[-1500:]
     save_state()
     log.info("Foto recibida por Telegram guardada y registrada para procesar: %s (%s)", nombre, file_meta["id"])
-    return nombre
+    return {"id": file_meta["id"], "name": nombre}
 
 def procesar_mensaje(msg):
     chat_id = str(msg.get("chat", {}).get("id", ""))
@@ -483,22 +486,33 @@ def procesar_mensaje(msg):
         if (msg.get("text") or "").strip().lower() in ("/start", "/ayuda", "ayuda"):
             enviar_texto("El bot está en línea, pero este chat no está autorizado para operar. Revisá PUBLISHER_TELEGRAM_CHAT_ID en los secretos de GitHub Actions.", chat_id=chat_id)
         return
-    # Las fotos se reciben directamente por Telegram, se guardan en 1_entrada de Drive
-    # y el ciclo normal las detecta para iniciar el análisis del lote.
+    # Las fotos se guardan en Drive. Si vienen con texto/caption, se procesa junto con la foto
+    # para que el texto no se pierda y el borrador use esa imagen.
+    texto = (msg.get("text") or msg.get("caption") or "").strip()
     if msg.get("photo") or (msg.get("document") or {}).get("mime_type", "").lower().startswith("image/"):
         try:
-            nombre = _guardar_imagen_telegram_en_drive(msg, chat_id)
-            if nombre:
-                enviar_texto(
-                    f"Foto recibida y guardada en 1_entrada de Google Drive: {nombre}.\n"
-                    "Quedó registrada para procesar. Enviá la otra foto ahora; cuando termines, el sistema analizará el lote y te enviará el cartel para publicar, modificar o cancelar.",
-                    chat_id=chat_id)
-                return
+            foto_recibida = _guardar_imagen_telegram_en_drive(msg, chat_id)
+            if foto_recibida:
+                if texto:
+                    state.setdefault("pending_drive", {}).pop(foto_recibida["id"], None)
+                    state.setdefault("processed_drive_ids", []).append(foto_recibida["id"])
+                    state["processed_drive_ids"] = list(dict.fromkeys(state["processed_drive_ids"]))[-3000:]
+                    state.setdefault("pending_manual", {})[chat_id] = {
+                        "foto_id": foto_recibida["id"], "nombres": [foto_recibida["name"]],
+                        "texto_ocr": texto[:8000], "precios_detectados": []
+                    }
+                    save_state()
+                    log.info("La foto con texto adjunto se asociará al borrador: %s", foto_recibida["name"])
+                else:
+                    enviar_texto(
+                        f"Foto recibida y guardada en 1_entrada de Google Drive: {foto_recibida['name']}.\n"
+                        "Quedó registrada para procesar. Enviá la otra foto ahora; cuando termines, el sistema analizará el lote y te enviará el borrador con botones para revisar antes de publicar.",
+                        chat_id=chat_id)
+                    return
         except Exception as e:
             log.exception("No pude guardar en Drive una imagen recibida por Telegram")
             enviar_texto(f"No pude guardar la foto en 1_entrada de Google Drive: {e}. No se inició el análisis; podés volver a enviarla.", chat_id=chat_id)
             return
-    texto = (msg.get("text") or msg.get("caption") or "").strip()
     if not texto:
         return
     if texto.lower() in ("/start", "/ayuda", "ayuda"):
@@ -516,7 +530,7 @@ def procesar_mensaje(msg):
         if 1000 <= importe <= 100_000_000:
             nombre_pendiente = pi.inferir_nombre_producto(pendiente.get("texto_ocr", ""))
             texto = f"Producto: {nombre_pendiente}\nEfectivo: {importe}"
-    productos_proveedor = _productos_de_texto_proveedor(texto) if sin_foto else []
+    productos_proveedor = _productos_de_texto_proveedor(texto)
     if sin_foto:
         tiene_producto = re.search(r"(?im)^\s*producto\s*:\s*.+$", texto)
         tiene_precio = re.search(
@@ -579,7 +593,7 @@ def procesar_mensaje(msg):
     state.setdefault("drafts", {})[rec["id"]] = rec
     save_state()
     try:
-        _regenerar(rec, chat_id)
+        _regenerar(rec, chat_id, nuevo=True)
         if not sin_foto:
             state.get("pending_manual", {}).pop(chat_id, None)
         save_state()
