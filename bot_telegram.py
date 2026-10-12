@@ -163,9 +163,13 @@ def _precios_detectados(texto):
     # Respetar el orden en que aparecen los importes en el OCR; la etiqueta solo se usa
     # cuando el extractor encontró una asociación explícita/probable.
     for p in detectados:
-        # Nunca usar automáticamente importes de cuotas o financiación.
+        # La etiqueta debe leerse ANTES de filtrar líneas que también mencionan cuotas.
+        # Si la línea contiene contado y cuotas, conservar el importe identificado como contado.
         linea = str(p.get("linea", ""))
-        if re.search(r"financiad|cuotas?|tarjeta de cr[eé]dito|plan de pago|inter[eé]s", linea, re.I) and etiqueta.lower() not in ("efectivo", "contado", "cash"):
+        etiqueta = str(p.get("etiqueta", "")).strip()
+        etiqueta_norm = etiqueta.lower()
+        es_contado = etiqueta_norm in ("efectivo", "contado", "cash")
+        if re.search(r"financiad|cuotas?|tarjeta de cr[eé]dito|plan de pago|inter[eé]s", linea, re.I) and not es_contado:
             continue
         try:
             valor = int(p.get("costo", 0))
@@ -173,7 +177,6 @@ def _precios_detectados(texto):
             continue
         if valor <= 0 or valor in vistos:
             continue
-        etiqueta = str(p.get("etiqueta", "")).strip()
         if etiqueta.lower() in ("", "sin identificar", "desconocido", "none"):
             etiqueta = f"Precio {len(resultado) + 1}"
         resultado.append({"etiqueta": etiqueta, "costo": valor, "origen": p.get("linea", "")})
