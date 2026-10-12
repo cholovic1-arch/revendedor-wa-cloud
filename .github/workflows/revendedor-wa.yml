@@ -2,8 +2,11 @@
 name: Revendedor WA - procesar Drive y Telegram
 
 on:
+  push:
+    branches:
+      - main
   schedule:
-    - cron: "4-59/5 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 concurrency:
