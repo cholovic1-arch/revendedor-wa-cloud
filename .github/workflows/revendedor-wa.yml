@@ -6,7 +6,8 @@ on:
     branches:
       - main
   schedule:
-    - cron: "*/5 * * * *"
+    # Re-registrar el sondeo fuera del minuto cero para reducir demoras del scheduler.
+    - cron: "3/5 * * * *"
   workflow_dispatch:
 
 concurrency:
