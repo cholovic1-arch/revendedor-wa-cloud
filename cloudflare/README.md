@@ -1,31 +1,38 @@
 # Despachador de Revendedor WA
 
-Este Worker no procesa imágenes. Su única tarea es activar el workflow Python del repositorio cada cinco minutos. El análisis visual/OCR, generación de carteles, Drive y Telegram se ejecutan en GitHub Actions.
+El Worker recibe una petición POST autenticada y activa el workflow Python de GitHub Actions. El programador externo recomendado es cron-job.org (gratuito); así no dependemos de los cron de GitHub ni del Cron Trigger de Cloudflare.
 
-## Configuración de Cloudflare
+## 1. Configurar el Worker en Cloudflare
 
-- Código: `pumprecios-publicador.js`
-- Cron Trigger: `*/5 * * * *`
-- Secret obligatorio: `GITHUB_ACTIONS_TOKEN`
+En Workers & Pages > pumprecios-publicador > Settings > Variables and Secrets, crear un secret llamado `CRON_DISPATCH_SECRET` con una contraseña larga elegida por el usuario. Mantener también `GITHUB_ACTIONS_TOKEN` como secret existente, con permiso Actions: Read and write para este repositorio.
 
-El token de GitHub debe ser Fine-grained y limitarse al repositorio `cholovic1-arch/revendedor-wa-cloud`, con permiso de repositorio **Actions: Read and write**. No hace falta permiso de Contents para llamar al endpoint de dispatch; se puede dejar sin acceso de escritura a Contents. Nunca poner el token en el código ni enviarlo por chat.
+Desplegar el contenido actual de `pumprecios-publicador.js` (copiar el archivo desde este repositorio al editor del Worker y guardar/deploy). El Worker ya no usa Cron Triggers. En Triggers, retirar el antiguo Cron Trigger cuando el nuevo programador externo esté preparado.
 
-## Desplegar desde la carpeta cloudflare
+Endpoint:
+`POST https://pumprecios-publicador.cholo-vic1.workers.dev/run`
 
-Con Node.js instalado y Wrangler autenticado en la cuenta Cloudflare:
+Encabezado requerido:
+`Authorization: Bearer EL_MISMO_VALOR_DE_CRON_DISPATCH_SECRET`
 
-```powershell
-cd cloudflare
-npx wrangler secret put GITHUB_ACTIONS_TOKEN
-npx wrangler deploy
-```
+Un disparo correcto devuelve HTTP 202. Sin el secreto correcto devuelve HTTP 401.
 
-Wrangler toma el cron desde `wrangler.toml`. Para comprobar el Worker, abrir su URL debe mostrar `Revendedor WA dispatcher activo`. En Cloudflare, revisar **Workers & Pages → pumprecios-publicador → Triggers** y confirmar que aparece el cron cada cinco minutos.
+## 2. Programar cron-job.org
 
-## Revisión del resultado
+Crear una tarea gratuita:
+- URL: `https://pumprecios-publicador.cholo-vic1.workers.dev/run`
+- Método: `POST`
+- Intervalo: cada 5 minutos
+- Encabezado HTTP: `Authorization`
+- Valor: `Bearer EL_MISMO_VALOR_DE_CRON_DISPATCH_SECRET`
 
-Abrir GitHub Actions en el repositorio. Cada disparo correcto del Worker crea una ejecución con evento `workflow_dispatch`. Si no aparece, revisar en Cloudflare los logs del Worker y el secreto `GITHUB_ACTIONS_TOKEN`.
+No publicar ni compartir el secreto. Usar exactamente el mismo valor en Cloudflare y cron-job.org.
 
-## IA visual
+## 3. Comprobar el funcionamiento
 
-El workflow pasa los secretos `GEMINI_API_KEY` y `OPENROUTER_API_KEY` al código. Configurar al menos uno en GitHub Actions Secrets para análisis visual. OpenRouter usa solo un modelo marcado gratuito como respaldo. Si no se configura ninguna clave, el sistema avisa en el log y usa OCR; no finge que hubo análisis por IA.
+Cada llamada correcta debe crear una ejecución con evento `workflow_dispatch` en GitHub Actions. Revisar que el job finalice con éxito y que una foto nueva en la carpeta de entrada de Drive produzca la propuesta en Telegram.
+
+## 4. Variables de GitHub Actions
+
+El workflow requiere los secrets existentes: `PUBLISHER_TELEGRAM_BOT_TOKEN`, `PUBLISHER_TELEGRAM_CHAT_ID`, `DRIVE_FOLDER_INPUT`, `DRIVE_FOLDER_PROCESSED`, `DRIVE_FOLDER_OUTPUT`, `GOOGLE_CREDENTIALS_JSON`, `GOOGLE_TOKEN_JSON` y al menos una clave de IA (`GEMINI_API_KEY` o `OPENROUTER_API_KEY`).
+
+El Worker no analiza ni edita fotos: solo activa GitHub Actions. El procesamiento real ocurre en Python. No considerar resuelto hasta confirmar una ejecución automática y una propuesta nueva en Telegram.
