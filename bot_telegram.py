@@ -87,10 +87,42 @@ def save_state():
 
 
 def api(method, data=None, files=None, timeout=60):
-    r = requests.post(f"{API}/{method}", data=data or {}, files=files, timeout=timeout); r.raise_for_status()
-    j = r.json()
-    if not j.get("ok"): raise RuntimeError(j.get("description", f"Telegram {method} falló"))
-    return j.get("result")
+    """Llama a Telegram reintentando límites 429 y fallos temporales 5xx."""
+    ultimo_error = None
+    for intento in range(5):
+        try:
+            r = requests.post(f"{API}/{method}", data=data or {}, files=files, timeout=timeout)
+            if r.status_code == 429 or r.status_code in (500, 502, 503, 504):
+                espera = min(30, 2 ** intento)
+                try:
+                    detalle = r.json()
+                    espera = min(60, max(espera, int(detalle.get("parameters", {}).get("retry_after", 0))))
+                except Exception:
+                    pass
+                ultimo_error = RuntimeError(f"Telegram {method}: HTTP {r.status_code}; reintento en {espera}s")
+                log.warning("%s; intento %s/5.", ultimo_error, intento + 1)
+                if intento < 4:
+                    time.sleep(espera)
+                    continue
+                r.raise_for_status()
+            r.raise_for_status()
+            j = r.json()
+            if not j.get("ok"):
+                if j.get("error_code") == 429 and intento < 4:
+                    espera = min(60, int(j.get("parameters", {}).get("retry_after", 2 ** intento)))
+                    log.warning("Telegram limitó %s; reintento en %ss.", method, espera)
+                    time.sleep(espera)
+                    continue
+                raise RuntimeError(j.get("description", f"Telegram {method} falló"))
+            return j.get("result")
+        except (requests.RequestException, ValueError) as exc:
+            ultimo_error = exc
+            if intento >= 4:
+                raise
+            espera = min(30, 2 ** intento)
+            log.warning("Error temporal en Telegram %s (%s/5): %s. Reintento en %ss.", method, intento + 1, exc, espera)
+            time.sleep(espera)
+    raise RuntimeError(f"Telegram {method} no respondió tras 5 intentos: {ultimo_error}")
 
 
 def enviar_texto(texto, reply_markup=None, chat_id=None):
@@ -761,11 +793,43 @@ def escuchar_botones_una_vez(timeout=0):
     offset = int(state.get("last_update_id", 0)) + 1
     params = {"offset": offset, "timeout": timeout,
               "allowed_updates": json.dumps(["message", "callback_query"])}
-    response = requests.get(f"{API}/getUpdates", params=params, timeout=max(15, timeout + 10))
-    response.raise_for_status()
-    payload = response.json()
-    if not payload.get("ok"):
-        raise RuntimeError(payload.get("description", "getUpdates falló"))
+    payload = None
+    ultimo_error = None
+    for intento in range(5):
+        try:
+            response = requests.get(f"{API}/getUpdates", params=params, timeout=max(15, timeout + 10))
+            if response.status_code == 429 or response.status_code in (500, 502, 503, 504):
+                espera = min(30, 2 ** intento)
+                try:
+                    detalle = response.json()
+                    espera = min(60, max(espera, int(detalle.get("parameters", {}).get("retry_after", 0))))
+                except Exception:
+                    pass
+                ultimo_error = RuntimeError(f"getUpdates HTTP {response.status_code}")
+                if intento < 4:
+                    log.warning("Telegram getUpdates devolvió HTTP %s; reintento en %ss (%s/5).", response.status_code, espera, intento + 1)
+                    time.sleep(espera)
+                    continue
+                response.raise_for_status()
+            response.raise_for_status()
+            payload = response.json()
+            if not payload.get("ok"):
+                if payload.get("error_code") == 429 and intento < 4:
+                    espera = min(60, int(payload.get("parameters", {}).get("retry_after", 2 ** intento)))
+                    log.warning("Telegram limitó getUpdates; reintento en %ss.", espera)
+                    time.sleep(espera)
+                    continue
+                raise RuntimeError(payload.get("description", "getUpdates falló"))
+            break
+        except (requests.RequestException, ValueError) as exc:
+            ultimo_error = exc
+            if intento >= 4:
+                raise
+            espera = min(30, 2 ** intento)
+            log.warning("Error temporal consultando Telegram (%s/5): %s. Reintento en %ss.", intento + 1, exc, espera)
+            time.sleep(espera)
+    if payload is None:
+        raise RuntimeError(f"Telegram getUpdates falló tras 5 intentos: {ultimo_error}")
     updates = payload.get("result", [])
     for upd in updates:
         state["last_update_id"] = int(upd["update_id"])
@@ -798,10 +862,9 @@ def ejecutar_ciclo_cloud():
             fallos_telegram = 0
         except Exception:
             fallos_telegram += 1
-            log.exception("Error consultando Telegram (%s/3).", fallos_telegram)
-            if fallos_telegram >= 3:
-                raise
-            time.sleep(3)
+            espera = min(30, 2 ** min(fallos_telegram, 5))
+            log.exception("Error consultando Telegram (%s); el publicador seguirá activo y reintentará en %ss.", fallos_telegram, espera)
+            time.sleep(espera)
         ahora = time.monotonic()
         if ahora >= proxima_revision_drive:
             try:
