@@ -404,7 +404,7 @@ def _crear_borrador(service, lote, chat_id):
         monetarios = []
         for p in detectados:
             origen = str(p.get("origen", p.get("linea", "")))
-            if (re.search(r"\\$|\\d{1,3}[.,]\\d{3}", origen)
+            if (re.search(r"\$|\d{1,3}[.,]\d{3}", origen)
                     and not re.search(r"cuotas?|financiad|tarjeta|inter[eé]s|plan de pago", origen, re.I)):
                 monetarios.append(p)
         if monetarios:
