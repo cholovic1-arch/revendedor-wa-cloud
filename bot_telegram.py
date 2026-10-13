@@ -44,20 +44,48 @@ def _read_state_from_drive():
 
 
 def _write_state_to_drive(payload):
-    """Guarda el estado en appData; no expone el archivo en la carpeta de productos."""
+    """Guarda el estado en appData con reintentos ante fallos temporales de Google Drive."""
     global REMOTE_STATE_ID
     service = pi.obtener_servicio_drive()
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    media = MediaIoBaseUpload(io.BytesIO(raw), mimetype="application/json", resumable=False)
+
+    # El 502 reportado ocurre al actualizar el archivo de estado existente (uploadType=media),
+    # no necesariamente al subir la foto. Reintentar esta operación evita que un fallo
+    # transitorio deje la foto subida pero sin registrar en pending_drive.
     if REMOTE_STATE_ID:
-        service.files().update(fileId=REMOTE_STATE_ID, media_body=media, fields="id").execute()
-    else:
-        created = service.files().create(
-            body={"name": REMOTE_STATE_NAME, "parents": ["appDataFolder"]},
-            media_body=media,
-            fields="id,name",
-        ).execute()
-        REMOTE_STATE_ID = created["id"]
+        ultimo_error = None
+        for intento in range(6):
+            try:
+                media = MediaIoBaseUpload(
+                    io.BytesIO(raw), mimetype="application/json", resumable=False
+                )
+                service.files().update(
+                    fileId=REMOTE_STATE_ID, media_body=media, fields="id"
+                ).execute(num_retries=0)
+                return
+            except Exception as error:
+                ultimo_error = error
+                estado_http = getattr(getattr(error, "resp", None), "status", None)
+                temporal = estado_http in (408, 429, 500, 502, 503, 504)
+                if not temporal or intento == 5:
+                    raise
+                espera = min(30, 2 ** (intento + 1))
+                log.warning(
+                    "Google Drive falló al guardar el estado (HTTP %s). "
+                    "Reintento %s/6 en %ss.",
+                    estado_http, intento + 2, espera
+                )
+                time.sleep(espera)
+        raise ultimo_error
+
+    # Primer guardado: no existe aún un ID que pueda actualizarse.
+    media = MediaIoBaseUpload(io.BytesIO(raw), mimetype="application/json", resumable=False)
+    created = service.files().create(
+        body={"name": REMOTE_STATE_NAME, "parents": ["appDataFolder"]},
+        media_body=media,
+        fields="id,name",
+    ).execute(num_retries=3)
+    REMOTE_STATE_ID = created["id"]
 
 
 def load_state():
