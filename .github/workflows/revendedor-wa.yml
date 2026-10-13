@@ -31,6 +31,8 @@ jobs:
       GANANCIA_PORCENTAJE: "30"
       GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
       GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     steps:
       - name: Descargar el código del repositorio
         uses: actions/checkout@v4
@@ -90,5 +92,7 @@ jobs:
               raise SystemExit("Este token tiene un webhook activo. getUpdates no puede funcionar al mismo tiempo; no se modificó el webhook.")
           print("Recepción por getUpdates habilitada: no hay webhook activo en este token.")
           PY
-      - name: Mantener el sondeo activo de Telegram y revisar Google Drive
+      - name: Validar sintaxis del sistema
+        run: python -m py_compile bot_telegram.py procesar_imagenes.py script_editor.py config.py run_cloud_once.py
+      - name: Ejecutar una pasada de Telegram y Drive
         run: python run_cloud_once.py
