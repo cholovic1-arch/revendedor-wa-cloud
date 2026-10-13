@@ -354,16 +354,26 @@ def _crear_borrador(service, lote, chat_id):
         or _productos_texto_flexible(texto_caption)
     ) if texto_caption else []
     caption_detectados = _precios_detectados(texto_caption) if texto_caption else []
+    caption_solo_importe = re.fullmatch(
+        r"\\s*\\$?\\s*(\\d{1,3}(?:[.,]\\d{3}){1,2}|\\d{4,9})\\s*",
+        texto_caption,
+    ) if texto_caption else None
     nombre_caption = ""
     # Priorizar un producto e importe escritos explícitamente por el usuario.
-    if caption_productos:
+    if caption_solo_importe:
+        importe_caption = int(re.sub(r"\\D", "", caption_solo_importe.group(1)) or "0")
+        detectados = [{
+            "etiqueta": "Contado", "costo": importe_caption,
+            "origen": "importe escrito por el usuario junto a la foto"
+        }] if 1000 <= importe_caption <= 100_000_000 else []
+    elif caption_productos:
         elegido_caption = caption_productos[0]
         detectados = [{
             "etiqueta": "Contado", "costo": int(elegido_caption["costo"]),
             "origen": "texto escrito junto a la foto"
         }]
         nombre_caption = str(elegido_caption.get("producto", "")).strip()
-    else:
+    elif not caption_solo_importe:
         detectados = _precios_detectados(texto_ocr)
         if caption_detectados:
             efectivo_caption = [
@@ -630,7 +640,7 @@ def procesar_mensaje(msg):
             _productos_de_texto_proveedor(texto)
             or _productos_texto_flexible(texto)
             or re.search(
-                r"(?is)(?:producto\\s*:|precio\\s*:|efectivo\\s*:|contado\\s*:|transferencia\\s*:|lista\\s*:|\\$\\s*\\d|\\d{1,3}[.,]\\d{3})",
+                r"(?is)(?:producto\\s*:|precio\\s*:|efectivo\\s*:|contado\\s*:|transferencia\\s*:|lista\\s*:|\\$\\s*\\d|\\d{1,3}[.,]\\d{3}|^\\s*\\d{4,}(?:[.,]\\d{3})*\\s*$)",
                 texto,
             )
         )
