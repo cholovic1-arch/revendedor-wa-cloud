@@ -250,23 +250,36 @@ def extraer_precios(texto):
             continue
         previo = texto[max(0, m.start()-10):m.start()]
         despues = texto[m.end():min(len(texto), m.end()+10)]
-        cerca = texto[max(0, m.start()-80):min(len(texto), m.end()+80)]
-        # No descartar un importe solo porque OCR no leyó el signo $ o la etiqueta.
-        # Se validará la ambigüedad más adelante antes de generar el cartel.
-        # No aceptar números aislados incrustados en nombres, modelos o descripciones
-        # (por ejemplo, "MUNDO 520720 ...") como si fueran precios.
-        # Un importe sin signo debe tener separadores o contexto comercial explícito.
-        if not ("$" in previo + despues or re.search(
-            r"precio|costo|efectivo|transfer|lista|contado|valor|ars|mayorista|minorista|combo|cuotas|financ",
-            cerca, re.I
-        ) or re.search(r"[.,:'’´\s]", raw)):
-            continue
+        # Revisar la línea del importe y las líneas inmediatamente vecinas.
+        # No usar una etiqueta lejana de otro producto para validar un número de modelo.
         linea_actual = ""
         inicio_linea = 0
-        for ini, fin, linea in offsets:
+        idx_linea = -1
+        for idx, (ini, fin, linea) in enumerate(offsets):
             if ini <= m.start() <= fin:
-                linea_actual, inicio_linea = linea, ini
+                linea_actual, inicio_linea, idx_linea = linea, ini, idx
                 break
+        contexto_linea = bool(re.search(
+            r"precio|costo|efectivo|transfer|lista|contado|valor|ars|mayorista|minorista|combo|cuotas|financ",
+            linea_actual, re.I
+        ))
+        contexto_vecino = False
+        if idx_linea >= 0:
+            vecinos = []
+            if idx_linea > 0:
+                vecinos.append(offsets[idx_linea - 1][2])
+            if idx_linea + 1 < len(offsets):
+                vecinos.append(offsets[idx_linea + 1][2])
+            for vecina in vecinos:
+                if (re.search(r"efectivo|transfer|lista|contado|precio|costo|valor|ars|cuotas|financ", vecina, re.I)
+                    and len(list(patron.finditer(vecina))) == 1):
+                    contexto_vecino = True
+                    break
+        # Un número aislado incrustado en un nombre/modelo no es un precio.
+        # Aceptar moneda cercana, contexto comercial local, etiqueta vecina o formato con separadores.
+        if not ("$" in previo + despues or contexto_linea or contexto_vecino
+                or re.search(r"[.,:'’´]", raw)):
+            continue
         # La etiqueta de la misma línea más cercana al importe gana.
         candidatos = []
         pos_rel = m.start() - inicio_linea
