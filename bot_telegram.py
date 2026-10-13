@@ -328,13 +328,11 @@ def _foto_y_texto(service, lote):
     for f in lote:
         buff = pi.descargar_imagen_a_memoria(service, f["id"])
         ocr = pi.leer_texto_ocr(buff)
-        # La IA analiza visualmente cada imagen; OCR sigue disponible como respaldo.
-        analisis_ia = se.analizar_flyer_con_ia(buff, ocr)
         buff.seek(0)
         low = ocr.lower()
         precios = pi.extraer_precios(ocr)
         señales_precio = sum(1 for k in ("precio de lista", "efectivo", "contado", "transferencia", "precio", "lista") if k in low)
-        items.append({"file": f, "ocr": ocr, "precios": precios, "analisis_ia": analisis_ia,
+        items.append({"file": f, "ocr": ocr, "precios": precios, "analisis_ia": None,
                       "score_precio": señales_precio * 8 + len(precios) * 10 + low.count("$") * 5,
                       "buff": buff})
     if not items:
@@ -343,7 +341,10 @@ def _foto_y_texto(service, lote):
     foto = min(items, key=lambda x: (x["score_precio"], len(x["ocr"])))
     texto = "\n\n".join(x["ocr"] for x in sorted(items, key=lambda x: x["score_precio"], reverse=True))
     nombres = [x["file"].get("name", "imagen") for x in items]
-    return foto["buff"], foto["file"]["id"], nombres, texto, [x.get("analisis_ia") for x in items if x.get("analisis_ia")]
+    # Analizar con visión la imagen con más señales de folleto/precios; evita llamadas IA duplicadas.
+    flyer = max(items, key=lambda x: x["score_precio"])
+    analisis_ia = se.analizar_flyer_con_ia(flyer["buff"], flyer["ocr"])
+    return foto["buff"], foto["file"]["id"], nombres, texto, ([analisis_ia] if analisis_ia else [])
 
 def _crear_borrador(service, lote, chat_id):
     foto, foto_id, nombres, texto_ocr, analisis_ia = _foto_y_texto(service, lote)
