@@ -108,25 +108,37 @@ def analizar_flyer_con_ia(buffer_imagen, texto_ocr: str = "") -> dict[str, Any] 
     prompt = PROMPT + (texto_ocr or "(sin texto OCR)")[:9000]
     if gemini_key:
         try:
+            # Gemini 3.5 Flash-Lite no admite el parámetro de muestreo temperature.
+            # Enviarlo puede rechazar la petición y dejar al sistema usando solo OCR.
             url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent"
-            response = requests.post(
-                url,
-                params={"key": gemini_key},
-                json={"contents": [{"parts": [
-                    {"text": prompt},
-                    {"inline_data": {"mime_type": mime, "data": image_b64}},
-                ]}], "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"}},
-                timeout=40,
-            )
+            response = None
+            for intento in range(3):
+                response = requests.post(
+                    url,
+                    params={"key": gemini_key},
+                    json={"contents": [{"parts": [
+                        {"text": prompt},
+                        {"inline_data": {"mime_type": mime, "data": image_b64}},
+                    ]}], "generationConfig": {"responseMimeType": "application/json"}},
+                    timeout=45,
+                )
+                if response.status_code not in (408, 429, 500, 502, 503, 504) or intento == 2:
+                    break
+                espera = min(20, 2 ** (intento + 1))
+                log.warning(
+                    "Gemini respondió HTTP %s al analizar la imagen; reintento %s/3 en %ss.",
+                    response.status_code, intento + 2, espera
+                )
+                time.sleep(espera)
             response.raise_for_status()
-            parts = response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
-            texto = "\n".join(str(p.get("text", "")) for p in parts)
+            partes = response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            texto = "\n".join(str(p.get("text", "")) for p in partes)
             dato = _parsear_json(texto)
             if dato:
                 dato["proveedor_ia"] = "Gemini"
                 log.info("Análisis visual completado con Gemini.")
                 return dato
-            log.warning("Gemini respondió sin un JSON interpretable.")
+            log.warning("Gemini respondió sin un JSON interpretable; se probará el respaldo si está configurado.")
         except Exception as exc:
             log.warning("Falló Gemini; se probará OpenRouter si hay clave: %s", exc)
     if openrouter_key:
