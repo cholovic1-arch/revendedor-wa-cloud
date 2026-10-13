@@ -108,7 +108,7 @@ def analizar_flyer_con_ia(buffer_imagen, texto_ocr: str = "") -> dict[str, Any] 
     prompt = PROMPT + (texto_ocr or "(sin texto OCR)")[:9000]
     if gemini_key:
         try:
-            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+            url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent"
             response = requests.post(
                 url,
                 params={"key": gemini_key},
@@ -130,10 +130,8 @@ def analizar_flyer_con_ia(buffer_imagen, texto_ocr: str = "") -> dict[str, Any] 
         except Exception as exc:
             log.warning("Falló Gemini; se probará OpenRouter si hay clave: %s", exc)
     if openrouter_key:
-        modelos = [
-            "qwen/qwen-2.5-vl-72b-instruct:free",
-            "google/gemini-2.0-flash-001",
-        ]
+        # Solo modelo marcado como gratuito: nunca intentar un modelo de pago como respaldo.
+        modelos = ["qwen/qwen-2.5-vl-72b-instruct:free"]
         for modelo in modelos:
             try:
                 response = requests.post(
