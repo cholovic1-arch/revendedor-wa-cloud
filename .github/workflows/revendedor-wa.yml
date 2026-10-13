@@ -7,14 +7,7 @@ on:
       - main
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"
-  workflow_run:
-    workflows:
-      - "Revendedor WA - continuación automática"
-    types:
-      - completed
-    branches:
-      - main
+    - cron: "3-59/5 * * * *"
 
 concurrency:
   group: revendedor-wa-cloud
