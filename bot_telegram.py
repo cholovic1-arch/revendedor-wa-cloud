@@ -857,6 +857,23 @@ def vigilar_drive_una_vez():
     if not pending:
         log.info("No hay imágenes pendientes en 1_entrada.")
         return
+    # En el flujo habitual el proveedor manda dos imágenes (folleto + foto limpia).
+    # Si solo hay una y no trae precio/nombre en su leyenda, esperá hasta 15 min por la pareja;
+    # así una ejecución cada 5 min no procesa accidentalmente solo la primera foto.
+    if len(pending) == 1:
+        unico = next(iter(pending.values()))
+        archivo_unico = unico.get("file", {})
+        leyenda = str(archivo_unico.get("caption", "")).strip()
+        leyenda_tiene_datos = bool(
+            _productos_de_texto_proveedor(leyenda)
+            or _productos_texto_flexible(leyenda)
+            or re.search(r"(?im)^\\s*(producto|precio|efectivo|contado)\\s*:", leyenda)
+        )
+        edad_unico = now - float(unico.get("first_seen", now))
+        espera_unico = max(300, int(os.environ.get("CLOUD_SINGLE_PHOTO_WAIT_SECONDS", "900")))
+        if not leyenda_tiene_datos and edad_unico < espera_unico:
+            log.info("Hay una sola imagen sin datos de precio; espero la segunda foto hasta %s s antes de procesar un lote incompleto.", espera_unico)
+            return
     latest = max(x.get("last_seen", x.get("first_seen", now)) for x in pending.values())
     # Dar tiempo a que termine la carga de todas las fotos de un lote.
     # El escaneo de Drive ocurre cada 45 s: esperar solo 30 s hacía que la primera foto
