@@ -998,37 +998,23 @@ def escuchar_botones_una_vez(timeout=0):
 
 
 def ejecutar_ciclo_cloud():
-    """Mantiene activa cada ejecución: long polling de Telegram y revisión frecuente de Drive."""
+    """Una pasada por ejecución: GitHub Actions vuelve a invocar cada cinco minutos."""
     if not TELEGRAM_BOT_TOKEN:
         raise RuntimeError("Falta PUBLISHER_TELEGRAM_BOT_TOKEN en los secretos del repositorio.")
     if not TELEGRAM_CHAT_ID or not ID_ENTRADA or not ID_PUBLICAR:
         raise RuntimeError("Faltan TELEGRAM_CHAT_ID o IDs de carpetas de Drive en la configuración.")
     load_state()
-    duracion = max(60, min(270, int(os.environ.get("CLOUD_WORK_SECONDS", "270"))))
-    intervalo_drive = max(20, min(120, int(os.environ.get("CLOUD_DRIVE_INTERVAL_SECONDS", "45"))))
-    fin = time.monotonic() + duracion
-    proxima_revision_drive = 0.0
-    fallos_telegram = 0
-    log.info("Publicador en nube iniciado: sondeo continuo de Telegram durante %s s; Drive cada %s s.", duracion, intervalo_drive)
-    while time.monotonic() < fin:
-        try:
-            escuchar_botones_una_vez(timeout=20)
-            fallos_telegram = 0
-        except Exception:
-            fallos_telegram += 1
-            espera = min(30, 2 ** min(fallos_telegram, 5))
-            log.exception("Error consultando Telegram (%s); el publicador seguirá activo y reintentará en %ss.", fallos_telegram, espera)
-            time.sleep(espera)
-        ahora = time.monotonic()
-        if ahora >= proxima_revision_drive:
-            try:
-                vigilar_drive_una_vez()
-            except Exception:
-                log.exception("Falló una revisión de Drive; se conservaron los elementos pendientes para reintento.")
-            proxima_revision_drive = time.monotonic() + intervalo_drive
+    log.info("Publicador en nube iniciado: una pasada de Telegram y una revisión de Drive.")
+    try:
+        escuchar_botones_una_vez(timeout=20)
+    except Exception:
+        log.exception("Falló la consulta de Telegram; se continuará con la revisión de Drive en la próxima ejecución.")
+    try:
+        vigilar_drive_una_vez()
+    except Exception:
+        log.exception("Falló la revisión de Drive; se conservarán los elementos pendientes para reintento.")
     save_state()
-    log.info("Ventana de sondeo terminada; GitHub Actions volverá a ejecutar el flujo programado.")
-
+    log.info("Pasada terminada. La próxima ejecución programada volverá a consultar Telegram y Drive.")
 
 def main():
     if not TELEGRAM_BOT_TOKEN or "PEGAR" in TELEGRAM_BOT_TOKEN: raise RuntimeError("Falta TELEGRAM_BOT_TOKEN en la configuración; no compartas el token.")
