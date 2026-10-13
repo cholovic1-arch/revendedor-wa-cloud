@@ -1,0 +1,6 @@
+name = "pumprecios-publicador"
+main = "pumprecios-publicador.js"
+compatibility_date = "2026-10-13"
+
+[triggers]
+crons = ["*/5 * * * *"]
