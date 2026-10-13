@@ -6,6 +6,7 @@ from pathlib import Path
 import requests
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 import procesar_imagenes as pi
+import script_editor as se
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ID_ENTRADA, ID_PUBLICAR, GANANCIA_PORCENTAJE, ESCANEO_DRIVE_SEGUNDOS
 
 BASE = Path(__file__).resolve().parent
@@ -327,12 +328,15 @@ def _foto_y_texto(service, lote):
     for f in lote:
         buff = pi.descargar_imagen_a_memoria(service, f["id"])
         ocr = pi.leer_texto_ocr(buff)
+        # La IA analiza visualmente cada imagen; OCR sigue disponible como respaldo.
+        analisis_ia = se.analizar_flyer_con_ia(buff, ocr)
+        buff.seek(0)
         low = ocr.lower()
         precios = pi.extraer_precios(ocr)
         señales_precio = sum(1 for k in ("precio de lista", "efectivo", "contado", "transferencia", "precio", "lista") if k in low)
-        items.append({"file": f, "ocr": ocr, "precios": precios,
+        items.append({"file": f, "ocr": ocr, "precios": precios, "analisis_ia": analisis_ia,
                       "score_precio": señales_precio * 8 + len(precios) * 10 + low.count("$") * 5,
-                      "buff": pi.descargar_imagen_a_memoria(service, f["id"])})
+                      "buff": buff})
     if not items:
         raise ValueError("No hay imágenes para procesar")
     # Editar la foto con menos señales de lista de precios; extraer datos de ambas.
