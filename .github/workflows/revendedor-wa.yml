@@ -2,9 +2,6 @@
 name: Revendedor WA - procesar Drive y Telegram
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 concurrency:
