@@ -3,21 +3,12 @@ name: Revendedor WA - procesar Drive y Telegram
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "bot_telegram.py"
-      - "procesar_imagenes.py"
-      - "script_editor.py"
-      - "run_cloud_once.py"
-      - ".github/workflows/revendedor-wa.yml"
   schedule:
     # Respaldo autónomo: GitHub consulta cada cinco minutos, en minuto distinto al cron de Cloudflare.
     - cron: '2-59/5 * * * *'
 
 concurrency:
-  group: revendedor-wa-cloud
+  group: revendedor-wa-cloud-short-cycle
   cancel-in-progress: false
 
 permissions:
@@ -29,7 +20,8 @@ jobs:
     timeout-minutes: 10
     env:
       REVENDOR_CLOUD_MODE: "1"
-      CLOUD_DRIVE_INTERVAL_SECONDS: "45"
+      CLOUD_LISTENER_SECONDS: "60"
+      CLOUD_DRIVE_INTERVAL_SECONDS: "20"
       PUBLISHER_TELEGRAM_BOT_TOKEN: ${{ secrets.PUBLISHER_TELEGRAM_BOT_TOKEN }}
       PUBLISHER_TELEGRAM_CHAT_ID: ${{ secrets.PUBLISHER_TELEGRAM_CHAT_ID }}
       FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
