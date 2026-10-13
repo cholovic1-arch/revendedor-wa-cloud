@@ -1,11 +1,8 @@
-
 name: Revendedor WA - procesar Drive y Telegram
 
 on:
+  # Se activa desde el endpoint autenticado de Cloudflare, llamado por cron-job.org.
   workflow_dispatch:
-  schedule:
-    # Respaldo autónomo: GitHub consulta cada cinco minutos, en minuto distinto al cron de Cloudflare.
-    - cron: '3-59/5 * * * *'
 
 concurrency:
   group: revendedor-wa-cloud-short-cycle
@@ -74,7 +71,6 @@ jobs:
           python - <<'PY'
           import os
           import requests
-
           token = os.environ.get("PUBLISHER_TELEGRAM_BOT_TOKEN", "").strip()
           if not token:
               raise SystemExit("Falta el secreto PUBLISHER_TELEGRAM_BOT_TOKEN.")
