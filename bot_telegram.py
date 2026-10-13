@@ -725,10 +725,10 @@ def procesar_mensaje(msg):
         try:
             foto_recibida = _guardar_imagen_telegram_en_drive(msg, chat_id)
             if foto_recibida:
-                # Toda foto queda en la cola de Drive para que el analizador de imágenes
-                # pueda asociar la foto limpia con la lista de precios. No pasar el caption
-                # al parser de texto: eso provocaba el falso mensaje "No pude leer ningún importe".
-                save_state()
+                # _guardar_imagen_telegram_en_drive ya guarda en un solo paso la foto,
+                # la cola pending_drive y el last_update_id actual. No repetir el guardado:
+                # esa segunda escritura era la que producía el HTTP 502 y el falso error
+                # "No pude guardar la foto" después de haberla subido correctamente.
                 if texto:
                     log.info("Foto con texto adjunto conservada en la cola de imágenes: %s", foto_recibida["name"])
                     enviar_texto(
@@ -1037,9 +1037,26 @@ def escuchar_botones_una_vez(timeout=0):
         state["last_update_id"] = int(upd["update_id"])
         if "callback_query" in upd:
             procesar_callback(upd["callback_query"])
+            try:
+                save_state()
+            except Exception:
+                # No terminar la escucha por una caída temporal de Google Drive.
+                log.exception("No se pudo persistir el estado tras un botón; se reintentará en la próxima pasada.")
         elif "message" in upd:
-            procesar_mensaje(upd["message"])
-        save_state()
+            mensaje = upd["message"]
+            procesar_mensaje(mensaje)
+            es_foto = bool(
+                mensaje.get("photo")
+                or str((mensaje.get("document") or {}).get("mime_type", "")).lower().startswith("image/")
+            )
+            # La ruta de fotos ya persiste la cola y el offset antes de confirmar recepción.
+            # Para mensajes de texto sí guardamos aquí, pero un fallo de estado no debe
+            # tumbar el listener completo.
+            if not es_foto:
+                try:
+                    save_state()
+                except Exception:
+                    log.exception("No se pudo persistir el estado tras un mensaje; se reintentará en la próxima pasada.")
     if updates:
         log.info("Telegram: %s actualización(es) procesada(s).", len(updates))
     return len(updates)
