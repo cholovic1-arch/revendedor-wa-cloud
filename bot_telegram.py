@@ -343,10 +343,14 @@ def _foto_y_texto(service, lote):
     foto = min(items, key=lambda x: (x["score_precio"], len(x["ocr"])))
     texto = "\n\n".join(x["ocr"] for x in sorted(items, key=lambda x: x["score_precio"], reverse=True))
     nombres = [x["file"].get("name", "imagen") for x in items]
-    return foto["buff"], foto["file"]["id"], nombres, texto
+    return foto["buff"], foto["file"]["id"], nombres, texto, [x.get("analisis_ia") for x in items if x.get("analisis_ia")]
 
 def _crear_borrador(service, lote, chat_id):
-    foto, foto_id, nombres, texto_ocr = _foto_y_texto(service, lote)
+    foto, foto_id, nombres, texto_ocr, analisis_ia = _foto_y_texto(service, lote)
+    ia_precio = next((a for a in analisis_ia if a.get("precio_contado") and a.get("modalidad_precio") in ("efectivo", "contado") and float(a.get("confianza", 0)) >= 0.65), None)
+    ia_nombre = next((a.get("nombre_producto", "") for a in analisis_ia if a.get("nombre_producto")), "")
+    ia_detalle = next((a.get("detalle_producto", "") for a in analisis_ia if a.get("detalle_producto")), "")
+    ia_descripcion = next((a.get("texto_publicitario", "") for a in analisis_ia if a.get("texto_publicitario")), "")
     # Las leyendas escritas junto a las fotos son datos de entrada; no descartarlas.
     captions = list(dict.fromkeys(
         str((f or {}).get("caption", "")).strip()
@@ -378,7 +382,9 @@ def _crear_borrador(service, lote, chat_id):
         }]
         nombre_caption = str(elegido_caption.get("producto", "")).strip()
     elif not caption_solo_importe:
-        detectados = _precios_detectados(texto_ocr)
+        detectados = ([{"etiqueta": "Contado", "costo": int(ia_precio["precio_contado"]), "origen": "análisis visual IA", "moneda": ia_precio.get("moneda", "ARS")}] if ia_precio else _precios_detectados(texto_ocr))
+        if ia_precio:
+            log.info("Precio de contado reconocido por IA visual: %s (confianza %.2f).", ia_precio["precio_contado"], ia_precio.get("confianza", 0))
         if caption_detectados:
             efectivo_caption = [
                 p for p in caption_detectados
@@ -449,7 +455,7 @@ def _crear_borrador(service, lote, chat_id):
     porcentaje = float(GANANCIA_PORCENTAJE)
     precios = [{"etiqueta": "Contado", "costo": int(detectados[0]["costo"]),
                 "venta": round(int(detectados[0]["costo"]) * (1 + porcentaje / 100))}]
-    nombre = nombre_caption or pi.inferir_nombre_producto(texto_ocr)
+    nombre = nombre_caption or ia_nombre or pi.inferir_nombre_producto(texto_ocr)
     if nombre == "Producto":
         nombre = re.sub(r"[_-]+", " ", Path(nombres[0]).stem)[:90] or "Producto"
     cartel = pi.crear_cartel_tres_precios(foto, nombre, precios, porcentaje)
@@ -459,7 +465,8 @@ def _crear_borrador(service, lote, chat_id):
     rec = {"id": did, "nombre": nombre, "precios": precios, "porcentaje": porcentaje,
            "foto_drive_id": foto_id, "archivos_origen": nombres, "output_id": upload.get("id"),
            "output_name": filename, "estado": "pendiente_revision", "chat_id": str(chat_id),
-           "caption": texto_cartel(nombre, precios, porcentaje), "created": int(time.time())}
+           "caption": ((ia_descripcion.strip() + "\n\n") if ia_descripcion else "") + se.generar_texto_publicitario(nombre, precios, ia_detalle),
+            "descripcion_ia": ia_descripcion, "detalle_producto": ia_detalle, "created": int(time.time())}
     state.setdefault("drafts", {})[did] = rec
     state.get("pending_manual", {}).pop(str(chat_id), None)
     save_state()
