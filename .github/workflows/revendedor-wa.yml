@@ -7,7 +7,8 @@ on:
       - main
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"
+    # Desfasado del minuto 00 para reducir retrasos del planificador de GitHub.
+    - cron: "2/5 * * * *"
 
 concurrency:
   group: revendedor-wa-cloud
@@ -22,7 +23,7 @@ jobs:
     timeout-minutes: 10
     env:
       REVENDOR_CLOUD_MODE: "1"
-      CLOUD_WORK_SECONDS: "210"
+      CLOUD_WORK_SECONDS: "270"
       CLOUD_DRIVE_INTERVAL_SECONDS: "45"
       PUBLISHER_TELEGRAM_BOT_TOKEN: ${{ secrets.PUBLISHER_TELEGRAM_BOT_TOKEN }}
       PUBLISHER_TELEGRAM_CHAT_ID: ${{ secrets.PUBLISHER_TELEGRAM_CHAT_ID }}
