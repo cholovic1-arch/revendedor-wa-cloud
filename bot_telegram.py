@@ -867,7 +867,7 @@ def vigilar_drive_una_vez():
         leyenda_tiene_datos = bool(
             _productos_de_texto_proveedor(leyenda)
             or _productos_texto_flexible(leyenda)
-            or re.search(r"(?im)^\\s*(producto|precio|efectivo|contado)\\s*:", leyenda)
+            or re.search(r"(?im)^\s*(producto|precio|efectivo|contado)\s*:", leyenda)
         )
         edad_unico = now - float(unico.get("first_seen", now))
         espera_unico = max(300, int(os.environ.get("CLOUD_SINGLE_PHOTO_WAIT_SECONDS", "900")))
