@@ -230,6 +230,41 @@ def _precios_detectados(texto):
     return resultado
 
 
+def _productos_texto_flexible(texto):
+    """Respaldo para mensajes de promociones escritos sin una plantilla fija."""
+    encontrados = []
+    vistos = set()
+    etiquetas = {"producto", "precio", "efectivo", "contado", "transferencia", "lista"}
+    patron = re.compile(
+        r"(?P<nombre>.+?)\s*[:：–—-]?\s*"
+        r"(?P<precio>(?:US\$|U\$S|\$)?\s*(?:\d{1,3}(?:[.,]\d{3}){1,2}|\d{4,}))"
+        r"\s*(?P<moneda>USD|ARS)?\s*(?P<modalidad>efectivo|contado|transferencia)?\s*$",
+        re.I,
+    )
+    for linea in re.split(r"\n+|[;|]+", (texto or "").replace("\r", "")):
+        limpia = re.sub(r"\s+", " ", linea).strip(" •-*")
+        if not limpia or re.search(r"cuotas?|financiad|tarjeta|inter[eé]s|subtotal|total", limpia, re.I):
+            continue
+        m = patron.match(limpia)
+        if not m:
+            continue
+        nombre = m.group("nombre").strip(" :：–—-.$")
+        if nombre.lower() in etiquetas:
+            continue
+        if len(nombre) < 3 or nombre.lower() in vistos:
+            continue
+        importe = int(re.sub(r"\D", "", m.group("precio")) or "0")
+        if importe < 1000:
+            continue
+        moneda_txt = (m.group("moneda") or "").upper()
+        precio_txt = (m.group("precio") or "").upper()
+        moneda = "USD" if moneda_txt == "USD" or precio_txt.startswith(("US$", "U$S")) else "ARS"
+        vistos.add(nombre.lower())
+        encontrados.append({"etiqueta": (m.group("modalidad") or "Contado").title(), "producto": nombre[:100], "costo": importe, "moneda": moneda})
+        if len(encontrados) >= 18:
+            break
+    return encontrados
+
 def _productos_de_texto_proveedor(texto):
     """Lee listas de proveedor con precios USD/ARS y aclaraciones después del precio."""
     encontrados = []
@@ -266,6 +301,8 @@ def _productos_de_texto_proveedor(texto):
             elegido = al_final[-1]
         m, importe, moneda, _ = elegido
         nombre = limpia[:m.start()].strip(" -:;$*")
+        if nombre.rstrip(":：").strip().lower() in {"producto", "precio", "efectivo", "contado", "transferencia", "lista"}:
+            continue
         nombre = re.sub(r"[*_]+", "", nombre)
         nombre = re.sub(r"\s+", " ", nombre).strip(" -:;$")
         if len(nombre) < 3 or nombre.lower() in vistos:
@@ -589,6 +626,13 @@ def procesar_mensaje(msg):
             nombre_pendiente = pi.inferir_nombre_producto(pendiente.get("texto_ocr", ""))
             texto = f"Producto: {nombre_pendiente}\nEfectivo: {importe}"
     productos_proveedor = _productos_de_texto_proveedor(texto)
+    if not productos_proveedor:
+        productos_proveedor = _productos_texto_flexible(texto)
+    log.info(
+        "Mensaje de Telegram recibido: chat_autorizado=%s, texto=%s, caracteres=%d, fotos=%d, productos_detectados=%d",
+        chat_id == str(TELEGRAM_CHAT_ID), bool(texto), len(texto),
+        len(msg.get("photo", [])), len(productos_proveedor),
+    )
     if sin_foto:
         tiene_producto = re.search(r"(?im)^\s*producto\s*:\s*.+$", texto)
         tiene_precio = re.search(
