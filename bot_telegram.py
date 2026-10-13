@@ -191,7 +191,7 @@ def publicar_en_facebook(rec):
 
 def teclado(did):
     return {"inline_keyboard": [[
-        {"text": "📣 Publicar en Facebook", "callback_data": f"ok:{did}"},
+        {"text": "✅ Confirmar cartel", "callback_data": f"ok:{did}"},
         {"text": "✏️ Modificar", "callback_data": f"edit:{did}"},
         {"text": "❌ Cancelar", "callback_data": f"cancel:{did}"}
     ]]}
@@ -454,6 +454,7 @@ def _crear_borrador(service, lote, chat_id):
         return
     porcentaje = float(GANANCIA_PORCENTAJE)
     precios = [{"etiqueta": "Contado", "costo": int(detectados[0]["costo"]),
+                "moneda": detectados[0].get("moneda", "ARS"),
                 "venta": round(int(detectados[0]["costo"]) * (1 + porcentaje / 100))}]
     nombre = nombre_caption or ia_nombre or pi.inferir_nombre_producto(texto_ocr)
     if nombre == "Producto":
@@ -492,7 +493,7 @@ def _regenerar(rec, chat_id, nuevo=False):
     filename = f"reventa_{rec['id']}_{uuid.uuid4().hex[:5]}.jpg"
     upload = pi.subir_imagen_a_drive(service, cartel, filename, ID_PUBLICAR)
     rec["output_id"] = upload.get("id"); rec["output_name"] = filename
-    rec["caption"] = texto_cartel(rec["nombre"], rec["precios"], rec["porcentaje"])
+    rec["caption"] = ((str(rec.get("descripcion_ia", "")).strip() + "\n\n") if rec.get("descripcion_ia") else "") + se.generar_texto_publicitario(rec["nombre"], rec["precios"], str(rec.get("detalle_producto", "")))
     rec["estado"] = "pendiente_revision"; save_state(); cartel.seek(0)
     enviar_foto(cartel, filename, rec["caption"], teclado(rec["id"]), chat_id)
     if nuevo:
@@ -555,40 +556,19 @@ def procesar_callback(cb):
     rec = state.get("drafts", {}).get(did)
     if not rec: enviar_texto("No encuentro ese borrador. Volvé a subir las imágenes a Drive.", chat_id=chat_id); return
     if action == "ok":
-        if rec.get("estado") == "publicado_facebook":
-            enviar_texto("Esta promoción ya figura como publicada en Facebook. No se volvió a publicar.", chat_id=chat_id)
+        if rec.get("estado") == "confirmado_listo":
+            enviar_texto("Este cartel ya está confirmado y guardado en 3_publicar. No se publicó automáticamente.", chat_id=chat_id)
             return
-        if rec.get("estado") == "publicando_facebook":
-            enviar_texto("La publicación ya está en curso. Esperá el resultado antes de volver a intentarlo.", chat_id=chat_id)
-            return
-        rec["estado"] = "publicando_facebook"
+        rec["estado"] = "confirmado_listo"
         rec["approved_at"] = rec.get("approved_at") or int(time.time())
         save_state()
-        try:
-            post_id = publicar_en_facebook(rec)
-            rec["estado"] = "publicado_facebook"
-            rec["facebook_post_id"] = post_id
-            rec["published_at"] = int(time.time())
-            rec.pop("error_publicacion", None)
-            save_state()
-            _editar_caption(chat_id, msg.get("message_id"), "✅ PUBLICADO EN FACEBOOK\n\n" + rec.get("caption", ""))
-            enviar_texto(
-                "✅ La promoción se publicó correctamente en la página de Facebook.\n"
-                + (f"ID de publicación: {post_id}\n" if post_id else "")
-                + "Los originales permanecen en 1_entrada.",
-                chat_id=chat_id,
-            )
-        except Exception as e:
-            rec["estado"] = "error_publicacion_facebook"
-            rec["error_publicacion"] = str(e)[:500]
-            save_state()
-            log.exception("No se pudo publicar la promoción aprobada en Facebook")
-            enviar_texto(
-                "⚠️ El cartel fue aprobado, pero Facebook no confirmó la publicación. "
-                "No se marcará como publicado. Detalle: " + str(e)[:700]
-                + "\nCorregí la configuración indicada y volvé a tocar «Confirmar cartel» para reintentar.",
-                chat_id=chat_id,
-            )
+        _editar_caption(chat_id, msg.get("message_id"), "✅ CARTEL CONFIRMADO — LISTO PARA PUBLICAR\n\n" + rec.get("caption", ""))
+        enviar_texto(
+            "✅ Cartel confirmado y guardado en 3_publicar.\n"
+            "No se publicó en Facebook ni en Instagram. Quedó listo para que lo publiques cuando quieras.\n"
+            "Los originales permanecen en 1_entrada.",
+            chat_id=chat_id,
+        )
     elif action == "edit":
         state.setdefault("waiting_edit", {})[chat_id] = did; save_state()
         enviar_texto("Escribí un porcentaje nuevo (ejemplo: 35%) para recalcular todos los precios, o un precio final específico (ejemplo: efectivo 125000).", chat_id=chat_id)
