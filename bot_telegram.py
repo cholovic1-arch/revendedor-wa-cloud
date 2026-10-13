@@ -397,12 +397,33 @@ def _crear_borrador(service, lote, chat_id):
     elif len(efectivo) == 1:
         detectados = [efectivo[0]]
     elif len(detectados) > 1:
-        # El OCR no puede decidir qué importe es contado: no generar un precio inventado.
-        log.warning(
-            "Importes ambiguos en el lote; no se elegirá un precio al azar: %s",
-            [(p.get("costo"), p.get("etiqueta"), p.get("origen", "")) for p in detectados]
-        )
-        detectados = []
+        # Respaldo automático: si el OCR perdió las etiquetas pero todos los importes
+        # tienen formato monetario explícito y ninguno menciona financiación/cuotas,
+        # usar el menor como precio de contado. No tomar códigos/modelos sin formato
+        # monetario y no bloquear la edición del cartel por una etiqueta ilegible.
+        monetarios = []
+        for p in detectados:
+            origen = str(p.get("origen", p.get("linea", "")))
+            if (re.search(r"\\$|\\d{1,3}[.,]\\d{3}", origen)
+                    and not re.search(r"cuotas?|financiad|tarjeta|inter[eé]s|plan de pago", origen, re.I)):
+                monetarios.append(p)
+        if monetarios:
+            elegido = min(monetarios, key=lambda p: int(p.get("costo", 0)))
+            detectados = [{
+                "etiqueta": "Contado",
+                "costo": int(elegido["costo"]),
+                "origen": "respaldo OCR: menor importe monetario explícito sin etiqueta legible"
+            }]
+            log.warning(
+                "OCR no pudo distinguir las modalidades; se generará el borrador usando el menor importe monetario explícito: %s",
+                elegido.get("costo")
+            )
+        else:
+            log.warning(
+                "Importes ambiguos sin formato monetario fiable; no se elige un precio: %s",
+                [(p.get("costo"), p.get("etiqueta"), p.get("origen", "")) for p in detectados]
+            )
+            detectados = []
     else:
         detectados = []
     if not detectados:
