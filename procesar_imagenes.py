@@ -253,10 +253,13 @@ def extraer_precios(texto):
         cerca = texto[max(0, m.start()-80):min(len(texto), m.end()+80)]
         # No descartar un importe solo porque OCR no leyó el signo $ o la etiqueta.
         # Se validará la ambigüedad más adelante antes de generar el cartel.
+        # No aceptar números aislados incrustados en nombres, modelos o descripciones
+        # (por ejemplo, "MUNDO 520720 ...") como si fueran precios.
+        # Un importe sin signo debe tener separadores o contexto comercial explícito.
         if not ("$" in previo + despues or re.search(
             r"precio|costo|efectivo|transfer|lista|contado|valor|ars|mayorista|minorista|combo|cuotas|financ",
             cerca, re.I
-        ) or re.search(r"[.,:'’´\s]", raw) or raw.isdigit()):
+        ) or re.search(r"[.,:'’´\s]", raw)):
             continue
         linea_actual = ""
         inicio_linea = 0
