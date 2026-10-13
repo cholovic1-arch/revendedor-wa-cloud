@@ -343,28 +343,59 @@ def _foto_y_texto(service, lote):
 
 def _crear_borrador(service, lote, chat_id):
     foto, foto_id, nombres, texto_ocr = _foto_y_texto(service, lote)
-    detectados = _precios_detectados(texto_ocr)
-    # Un único importe se toma como base. Con varios, se exige reconocer contado/efectivo.
+    # Las leyendas escritas junto a las fotos son datos de entrada; no descartarlas.
+    captions = list(dict.fromkeys(
+        str((f or {}).get("caption", "")).strip()
+        for f in lote if str((f or {}).get("caption", "")).strip()
+    ))
+    texto_caption = "\n".join(captions)
+    caption_productos = (
+        _productos_de_texto_proveedor(texto_caption)
+        or _productos_texto_flexible(texto_caption)
+    ) if texto_caption else []
+    caption_detectados = _precios_detectados(texto_caption) if texto_caption else []
+    nombre_caption = ""
+    # Priorizar un producto e importe escritos explícitamente por el usuario.
+    if caption_productos:
+        elegido_caption = caption_productos[0]
+        detectados = [{
+            "etiqueta": "Contado", "costo": int(elegido_caption["costo"]),
+            "origen": "texto escrito junto a la foto"
+        }]
+        nombre_caption = str(elegido_caption.get("producto", "")).strip()
+    else:
+        detectados = _precios_detectados(texto_ocr)
+        if caption_detectados:
+            efectivo_caption = [
+                p for p in caption_detectados
+                if p["etiqueta"].lower() in ("efectivo", "contado", "cash")
+            ]
+            if len(caption_detectados) == 1 or len(efectivo_caption) == 1:
+                detectados = [
+                    efectivo_caption[0] if len(efectivo_caption) == 1
+                    else caption_detectados[0]
+                ]
+            elif len(caption_detectados) > 1:
+                # No elegir al azar si la leyenda trae varios importes sin modalidad clara.
+                detectados = []
+    m_nombre_caption = re.search(r"(?im)^\s*producto\s*:\s*(.+?)\s*$", texto_caption)
+    if m_nombre_caption:
+        nombre_caption = m_nombre_caption.group(1).strip()[:100]
     efectivo = [p for p in detectados if p["etiqueta"].lower() in ("efectivo", "contado", "cash")]
     if len(detectados) == 1:
         detectados = [detectados[0]]
     elif len(efectivo) == 1:
         detectados = [efectivo[0]]
     elif len(detectados) > 1:
-        # El OCR de listas en columnas a veces pierde la etiqueta "efectivo".
-        # Tras excluir importes financiados, usar el menor precio detectado como
-        # aproximación conservadora al contado y dejar siempre el borrador sujeto a aprobación.
-        elegido = min(detectados, key=lambda p: int(p["costo"]))
+        # El OCR no puede decidir qué importe es contado: no generar un precio inventado.
         log.warning(
-            "No se reconoció la etiqueta contado; se prepara borrador con el menor importe no financiado: %s (%s)",
-            elegido.get("costo"), elegido.get("origen", "")
+            "Importes ambiguos en el lote; no se elegirá un precio al azar: %s",
+            [(p.get("costo"), p.get("etiqueta"), p.get("origen", "")) for p in detectados]
         )
-        detectados = [elegido]
+        detectados = []
     else:
         detectados = []
     if not detectados:
-        # Si este lote ya fue reintentado con la versión actual del OCR,
-        # conservar esa marca para evitar reintentos y avisos repetidos.
         reintento_ocr_ya_realizado = bool(
             state.get("pending_manual", {}).get(str(chat_id), {}).get("auto_retry_ocr_v4")
         )
@@ -374,17 +405,16 @@ def _crear_borrador(service, lote, chat_id):
         }
         save_state()
         enviar_texto(
-            "Recibí las dos imágenes, pero no pude asociar con seguridad el precio de contado. No voy a elegir entre precios de lista y contado al azar.\n\n"
+            "Recibí las imágenes, pero no pude confirmar con seguridad el precio de contado. No voy a inventarlo.\n\n"
             f"Archivos: {', '.join(nombres)}\n\n"
-            "Respondé en este mismo chat con el precio de contado, por ejemplo:\n"
-            "Producto: Freezer horizontal FH550\nEfectivo: 895000\n\n"
-            "Con ese dato genero el cartel usando la foto limpia. Los originales siguen en 1_entrada.",
+            "Si el precio está escrito en el mensaje junto a la foto, lo usaré. Si el cartel trae varios importes sin etiquetas legibles, respondé solo con el precio de contado; no hace falta volver a escribir el nombre del producto.\n\n"
+            "Los originales siguen en 1_entrada.",
             chat_id=chat_id)
         return
     porcentaje = float(GANANCIA_PORCENTAJE)
     precios = [{"etiqueta": "Contado", "costo": int(detectados[0]["costo"]),
                 "venta": round(int(detectados[0]["costo"]) * (1 + porcentaje / 100))}]
-    nombre = pi.inferir_nombre_producto(texto_ocr)
+    nombre = nombre_caption or pi.inferir_nombre_producto(texto_ocr)
     if nombre == "Producto":
         nombre = re.sub(r"[_-]+", " ", Path(nombres[0]).stem)[:90] or "Producto"
     cartel = pi.crear_cartel_tres_precios(foto, nombre, precios, porcentaje)
@@ -400,12 +430,17 @@ def _crear_borrador(service, lote, chat_id):
     save_state()
     cartel.seek(0)
     enviar_foto(cartel, filename, rec["caption"], teclado(did), chat_id)
+    log.info(
+        "Borrador generado y enviado: producto=%r, costo_contado=%s, venta=%s, fotos=%d",
+        nombre, precios[0]["costo"], precios[0]["venta"], len(nombres)
+    )
     enviar_texto(
         f"Borrador listo para revisar.\n\nProducto: {nombre}\n"
         f"Precio de contado del proveedor: {pesos(precios[0]['costo'])}\n"
         f"Tu precio con {porcentaje:g}% de ganancia: {pesos(precios[0]['venta'])}\n\n"
         "Todavía no se publicó. Usá Publicar, Modificar o Cancelar. Los originales siguen en 1_entrada.",
         chat_id=chat_id)
+
 
 def _regenerar(rec, chat_id, nuevo=False):
     service = pi.obtener_servicio_drive()
@@ -558,7 +593,9 @@ def _guardar_imagen_telegram_en_drive(msg, chat_id):
     buffer = io.BytesIO(descarga.content)
     service = pi.obtener_servicio_drive()
     subida = pi.subir_imagen_a_drive(service, buffer, nombre, ID_ENTRADA, mime_type=mime_type)
-    file_meta = {"id": subida["id"], "name": subida.get("name", nombre), "mimeType": mime_type}
+    texto_adjunto = str(msg.get("caption") or msg.get("text") or "").strip()
+    file_meta = {"id": subida["id"], "name": subida.get("name", nombre), "mimeType": mime_type,
+                 "caption": texto_adjunto}
     ahora = time.time()
     # Registrar el archivo en el estado de trabajo de inmediato: el procesamiento no depende
     # de que otro escaneo llegue a descubrirlo en Drive.
