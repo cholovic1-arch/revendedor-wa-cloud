@@ -28,6 +28,8 @@ sudo bash deploy/oracle-install.sh
 
 ## Configurar secretos
 
+Para habilitar análisis visual por IA en la nube, configurar al menos una clave (`GEMINI_API_KEY` o `OPENROUTER_API_KEY`) en GitHub Actions Secrets; en Oracle, agregar la misma variable al `.env`. No guardar claves dentro del código.
+
 Editar el archivo privado:
 
 ```bash
