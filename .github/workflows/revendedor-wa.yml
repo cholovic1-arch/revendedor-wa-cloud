@@ -3,6 +3,9 @@ name: Revendedor WA - procesar Drive y Telegram
 
 on:
   workflow_dispatch:
+  schedule:
+    # Respaldo autónomo: GitHub consulta cada cinco minutos, en minuto distinto al cron de Cloudflare.
+    - cron: '2-59/5 * * * *'
 
 concurrency:
   group: revendedor-wa-cloud
