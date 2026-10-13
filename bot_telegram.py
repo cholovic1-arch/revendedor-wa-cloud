@@ -618,10 +618,48 @@ def procesar_mensaje(msg):
         if (msg.get("text") or "").strip().lower() in ("/start", "/ayuda", "ayuda"):
             enviar_texto("El bot está en línea, pero este chat no está autorizado para operar. Revisá PUBLISHER_TELEGRAM_CHAT_ID en los secretos de GitHub Actions.", chat_id=chat_id)
         return
-    # Las fotos se guardan en Drive. Si vienen con texto/caption, se procesa junto con la foto
-    # para que el texto no se pierda y el borrador use esa imagen.
+    # Las fotos se guardan en Drive. Si vienen con texto/caption, se procesa junto con la foto.
     texto = (msg.get("text") or msg.get("caption") or "").strip()
-    if msg.get("photo") or (msg.get("document") or {}).get("mime_type", "").lower().startswith("image/"):
+    es_imagen = bool(msg.get("photo") or (msg.get("document") or {}).get("mime_type", "").lower().startswith("image/"))
+
+    # Telegram suele mandar la foto y el nombre/precio como dos mensajes separados.
+    # Si hay fotos recientes esperando análisis, asociarles el texto para que no se
+    # procese como una oferta distinta sin fotografía.
+    if texto and not es_imagen and chat_id not in state.get("waiting_edit", {}) and not state.get("pending_manual", {}).get(chat_id):
+        parece_datos_producto = bool(
+            _productos_de_texto_proveedor(texto)
+            or _productos_texto_flexible(texto)
+            or re.search(
+                r"(?is)(?:producto\\s*:|precio\\s*:|efectivo\\s*:|contado\\s*:|transferencia\\s*:|lista\\s*:|\\$\\s*\\d|\\d{1,3}[.,]\\d{3})",
+                texto,
+            )
+        )
+        if parece_datos_producto:
+            ahora_adjuntar = time.time()
+            cola = state.setdefault("pending_drive", {})
+            recientes = [
+                (fid, item) for fid, item in cola.items()
+                if ahora_adjuntar - float(item.get("last_seen", item.get("first_seen", 0))) <= 900
+                and isinstance(item.get("file"), dict)
+            ]
+            recientes.sort(key=lambda par: float(par[1].get("first_seen", par[1].get("last_seen", 0))))
+            if recientes:
+                grupo = recientes[-2:]
+                for fid, item in grupo:
+                    item["file"]["caption"] = texto
+                    item["last_seen"] = ahora_adjuntar
+                save_state()
+                log.info(
+                    "Texto de producto asociado a %s foto(s) pendientes; no se tratará como oferta separada.",
+                    len(grupo),
+                )
+                enviar_texto(
+                    "Asocié el nombre/precio que enviaste con las fotos pendientes. Voy a usar ese dato para preparar el cartel y no crear una oferta aparte.",
+                    chat_id=chat_id,
+                )
+                return
+
+    if es_imagen:
         try:
             foto_recibida = _guardar_imagen_telegram_en_drive(msg, chat_id)
             if foto_recibida:
