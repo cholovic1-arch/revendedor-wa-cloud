@@ -846,8 +846,12 @@ def vigilar_drive_una_vez():
         return
     latest = max(x.get("last_seen", x.get("first_seen", now)) for x in pending.values())
     # Dar tiempo a que termine la carga de todas las fotos de un lote.
-    if now - latest < 30:
-        log.info("Hay imágenes recién detectadas; se procesarán en el próximo ciclo para dejar terminar la carga.")
+    # El escaneo de Drive ocurre cada 45 s: esperar solo 30 s hacía que la primera foto
+    # se procesara sola antes de que el siguiente escaneo detectara la segunda. Dar una
+    # ventana real para recibir el par (folleto de precios + foto limpia).
+    ventana_lote = max(90, int(os.environ.get("CLOUD_BATCH_WAIT_SECONDS", "90")))
+    if now - latest < ventana_lote:
+        log.info("Hay imágenes recientes; espero %s s desde la última detección para agrupar las fotos del producto.", ventana_lote)
         return
     # Cada promoción se arma con un par de imágenes: primero la lista de precios y
     # luego la foto limpia (o viceversa). No mezclar dos productos enviados seguidos.
