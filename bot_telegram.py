@@ -1046,23 +1046,42 @@ def escuchar_botones_una_vez(timeout=0):
 
 
 def ejecutar_ciclo_cloud():
-    """Una pasada por ejecución: GitHub Actions vuelve a invocar cada cinco minutos."""
+    """Mantiene Telegram y Drive atendidos durante la mayor parte de cada ejecución gratuita."""
     if not TELEGRAM_BOT_TOKEN:
         raise RuntimeError("Falta PUBLISHER_TELEGRAM_BOT_TOKEN en los secretos del repositorio.")
     if not TELEGRAM_CHAT_ID or not ID_ENTRADA or not ID_PUBLICAR:
         raise RuntimeError("Faltan TELEGRAM_CHAT_ID o IDs de carpetas de Drive en la configuración.")
+
     load_state()
-    log.info("Publicador en nube iniciado: una pasada de Telegram y una revisión de Drive.")
-    try:
-        escuchar_botones_una_vez(timeout=20)
-    except Exception:
-        log.exception("Falló la consulta de Telegram; se continuará con la revisión de Drive en la próxima ejecución.")
-    try:
-        vigilar_drive_una_vez()
-    except Exception:
-        log.exception("Falló la revisión de Drive; se conservarán los elementos pendientes para reintento.")
+    duracion = max(60, min(240, int(os.environ.get("CLOUD_LISTENER_SECONDS", "210"))))
+    intervalo_drive = max(20, int(os.environ.get("CLOUD_DRIVE_INTERVAL_SECONDS", "45")))
+    fin = time.monotonic() + duracion
+    proxima_revision_drive = 0.0
+    log.info(
+        "Monitor en nube iniciado por %s s: Telegram en escucha continua y Drive cada %s s.",
+        duracion, intervalo_drive
+    )
+
+    while time.monotonic() < fin:
+        try:
+            # Long polling: Telegram devuelve los mensajes en cuanto llegan, sin esperar
+            # a que termine el ciclo completo.
+            escuchar_botones_una_vez(timeout=20)
+        except Exception:
+            log.exception("Falló temporalmente la consulta de Telegram; se reintentará en este ciclo.")
+            time.sleep(2)
+
+        ahora = time.monotonic()
+        if ahora >= proxima_revision_drive:
+            try:
+                vigilar_drive_una_vez()
+            except Exception:
+                log.exception("Falló la revisión de Drive; se conservarán los elementos pendientes para reintento.")
+            proxima_revision_drive = time.monotonic() + intervalo_drive
+
+    # Persistir el último offset y el estado de borradores antes de terminar el runner.
     save_state()
-    log.info("Pasada terminada. La próxima ejecución programada volverá a consultar Telegram y Drive.")
+    log.info("Monitor en nube finalizado; la próxima ejecución programada retomará la escucha.")
 
 def main():
     if not TELEGRAM_BOT_TOKEN or "PEGAR" in TELEGRAM_BOT_TOKEN: raise RuntimeError("Falta TELEGRAM_BOT_TOKEN en la configuración; no compartas el token.")
