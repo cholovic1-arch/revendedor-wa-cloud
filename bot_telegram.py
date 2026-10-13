@@ -658,7 +658,18 @@ def _guardar_imagen_telegram_en_drive(msg, chat_id):
     if file_meta["id"] not in seen:
         seen.append(file_meta["id"])
     state["seen_drive_ids"] = seen[-1500:]
-    save_state()
+    try:
+        save_state()
+    except Exception:
+        # La foto ya fue subida a 1_entrada. Un fallo al actualizar appData no debe
+        # informar falsamente que la foto no se guardó ni pedir al usuario reenviarla.
+        # El escaneo periódico de Drive podrá recuperar el archivo si el estado remoto
+        # sigue temporalmente inaccesible.
+        log.exception(
+            "La foto %s quedó guardada en Drive, pero no pude persistir el estado remoto. "
+            "Se intentará recuperar durante el próximo escaneo.",
+            nombre,
+        )
     log.info("Foto recibida por Telegram guardada y registrada para procesar: %s (%s)", nombre, file_meta["id"])
     return {"id": file_meta["id"], "name": nombre}
 
