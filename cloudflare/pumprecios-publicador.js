@@ -1,6 +1,6 @@
 /**
  * Despachador de Revendedor WA.
- * Configurar un Cron Trigger en Cloudflare: */5 * * * *
+ * Configurar un Cron Trigger en Cloudflare para ejecutarse cada cinco minutos
  * Crear el secret GITHUB_ACTIONS_TOKEN con un Fine-grained PAT:
  * Repository: cholovic1-arch/revendedor-wa-cloud
  * Repository permissions: Actions = Read and write; Contents = Read-only.
