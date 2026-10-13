@@ -1070,7 +1070,7 @@ def ejecutar_ciclo_cloud():
         raise RuntimeError("Faltan TELEGRAM_CHAT_ID o IDs de carpetas de Drive en la configuración.")
 
     load_state()
-    duracion = max(60, min(240, int(os.environ.get("CLOUD_LISTENER_SECONDS", "210"))))
+    duracion = max(60, min(270, int(os.environ.get("CLOUD_LISTENER_SECONDS", "270"))))
     intervalo_drive = max(20, int(os.environ.get("CLOUD_DRIVE_INTERVAL_SECONDS", "45")))
     fin = time.monotonic() + duracion
     proxima_revision_drive = 0.0
