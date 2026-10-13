@@ -3,6 +3,15 @@ name: Revendedor WA - procesar Drive y Telegram
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "bot_telegram.py"
+      - "procesar_imagenes.py"
+      - "script_editor.py"
+      - "run_cloud_once.py"
+      - ".github/workflows/revendedor-wa.yml"
   schedule:
     # Respaldo autónomo: GitHub consulta cada cinco minutos, en minuto distinto al cron de Cloudflare.
     - cron: '2-59/5 * * * *'
