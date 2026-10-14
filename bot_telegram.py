@@ -171,12 +171,17 @@ def enviar_foto(buffer, nombre, caption, keyboard=None, chat_id=None):
     return api("sendPhoto", data=data, files={"photo": (nombre, buffer, "image/jpeg")}, timeout=90)
 
 
-def pesos(n): return "$" + f"{int(round(float(n))):,}".replace(",", ".")
+def redondear_precio(valor):
+    """Redondea importes positivos al entero más cercano; los .50 se redondean hacia arriba."""
+    return int(float(valor) + 0.5)
+
+
+def pesos(n): return "$" + f"{redondear_precio(n):,}".replace(",", ".")
 
 
 def formatear_precio(precio, valor):
     moneda = str(precio.get("moneda", "ARS")).upper()
-    importe = f"{int(round(float(valor))):,}".replace(",", ".")
+    importe = f"{redondear_precio(valor):,}".replace(",", ".")
     return f"USD {importe}" if moneda == "USD" else "$" + importe
 
 
@@ -555,7 +560,7 @@ def _crear_borrador(service, lote, chat_id):
     porcentaje = porcentaje_para_moneda(moneda_detectada)
     precios = [{"etiqueta": "Contado", "costo": int(detectados[0]["costo"]),
                 "moneda": moneda_detectada,
-                "venta": round(int(detectados[0]["costo"]) * (1 + porcentaje / 100))}]
+                "venta": redondear_precio(int(detectados[0]["costo"]) * (1 + porcentaje / 100))}]
     nombre = nombre_caption or ia_nombre or pi.inferir_nombre_producto(texto_ocr)
     if nombre == "Producto":
         nombre = re.sub(r"[_-]+", " ", Path(nombres[0]).stem)[:90] or "Producto"
@@ -598,11 +603,10 @@ def _regenerar(rec, chat_id, nuevo=False):
         copia = dict(item)
         producto = re.sub(r"[*_]+", "", str(copia.get("producto", "")).strip())
         producto = re.sub(r"(?i)\bULTIMA\s+UNIDAD\b", "Última unidad", producto)
-        producto = re.sub(r"(?i)\bULTIMO\b", "Última unidad", producto)
         producto = re.sub(r"\s+", " ", producto).strip(" -:;,.")
         detalle_item = str(item.get("detalle", "")).strip().strip("()")
         detalle_item = re.sub(r"[*_]+", "", detalle_item)
-        detalle_item = re.sub(r"(?i)^ultimo$", "Última unidad", detalle_item)
+        detalle_item = re.sub(r"(?i)^ultimo$", "Último", detalle_item)
         detalle_item = re.sub(r"(?i)^ultima unidad en ", "Última unidad en ", detalle_item)
         detalle_item = re.sub(r"(?i)^ultima unidad$", "Última unidad", detalle_item)
         detalle_item = re.sub(r"\s+", " ", detalle_item).strip(" -:;,.")
@@ -852,7 +856,7 @@ def _crear_borrador_video(rec, texto, chat_id):
         return
     porcentaje = porcentaje_para_moneda(moneda)
     precios = [{"etiqueta": "Contado", "producto": nombre, "moneda": moneda, "costo": costo,
-                "venta": round(costo * (1 + porcentaje / 100))}]
+                "venta": redondear_precio(costo * (1 + porcentaje / 100))}]
     detalle = str((ai or {}).get("detalle_producto") or "")
     rec.update({"nombre": nombre, "precios": precios, "porcentaje": porcentaje,
                 "caption": se.generar_texto_publicitario(nombre, precios, detalle),
@@ -1102,7 +1106,7 @@ def procesar_mensaje(msg):
                 "moneda": p.get("moneda", "ARS"), "costo": int(p["costo"]),
                 "porcentaje": porcentaje_para_moneda(p.get("moneda", "ARS")),
                 "detalle": p.get("detalle", ""),
-                "venta": round(int(p["costo"]) * (1 + porcentaje_para_moneda(p.get("moneda", "ARS")) / 100))
+                "venta": redondear_precio(int(p["costo"]) * (1 + porcentaje_para_moneda(p.get("moneda", "ARS")) / 100))
             } for p in grupo]
             nombre_grupo = "Ofertas del día" if len(grupos) == 1 else f"Ofertas del día ({indice}/{len(grupos)})"
             rec_grupo = {
@@ -1124,7 +1128,7 @@ def procesar_mensaje(msg):
         "costo": int(p["costo"]),
         "porcentaje": porcentaje_para_moneda(p.get("moneda", "ARS")),
         "detalle": p.get("detalle", ""),
-        "venta": round(int(p["costo"]) * (1 + porcentaje_para_moneda(p.get("moneda", "ARS")) / 100))
+        "venta": redondear_precio(int(p["costo"]) * (1 + porcentaje_para_moneda(p.get("moneda", "ARS")) / 100))
     } for p in detectados[:6]]
     foto_id = pendiente.get("foto_id")
     if not foto_id and not sin_foto:
