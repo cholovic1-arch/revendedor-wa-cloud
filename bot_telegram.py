@@ -219,7 +219,7 @@ def publicar_en_facebook(rec):
 
 def teclado(did):
     return {"inline_keyboard": [[
-        {"text": "✅ Confirmar cartel", "callback_data": f"ok:{did}"},
+        {"text": "✅ Confirmar y publicar", "callback_data": f"ok:{did}"},
         {"text": "✏️ Modificar", "callback_data": f"edit:{did}"},
         {"text": "❌ Cancelar", "callback_data": f"cancel:{did}"}
     ]]}
@@ -557,7 +557,34 @@ def _modificar(rec, chat_id, instruccion):
                 return
         m = re.search(r"(lista|efectivo|contado|cash|transferencia|precio\s*[1-3]|mayorista|minorista)\D{0,20}(\d[\d.,]*)", instruccion, re.I)
         if not m:
-            enviar_texto("No entendí el cambio. Escribí 35% para recalcular todo, o por ejemplo: efectivo 125000.", chat_id=chat_id)
+            # Aceptar cambios explícitos de nombre o descripción y regenerar el cartel.
+            nombre_cambio = re.match(
+                r"(?is)^\\s*(?:cambiar\\s+)?(?:el\\s+)?nombre\\s*(?:a|por|:)\\s*(.+?)\\s*$|^\\s*cambiar\\s+nombre\\s+(?:a|por)\\s+(.+?)\\s*$",
+                instruccion,
+            )
+            descripcion_cambio = re.match(
+                r"(?is)^\\s*(?:cambiar\\s+)?(?:la\\s+)?descripci[oó]n\\s*(?:a|por|:)\\s*(.+?)\\s*$",
+                instruccion,
+            )
+            if nombre_cambio:
+                nuevo_nombre = (nombre_cambio.group(1) or nombre_cambio.group(2) or "").strip()[:100]
+                if nuevo_nombre:
+                    rec["nombre"] = nuevo_nombre
+                    rec["descripcion_ia"] = ""
+                    _regenerar(rec, chat_id)
+                    return
+            if descripcion_cambio:
+                rec["descripcion_ia"] = descripcion_cambio.group(1).strip()[:850]
+                _regenerar(rec, chat_id)
+                return
+            enviar_texto(
+                "No identifiqué un cambio concreto. Podés escribir, por ejemplo:\\n"
+                "• 35% (recalcular los precios)\\n"
+                "• efectivo 125000 (cambiar un precio)\\n"
+                "• cambiar nombre a Taladro inalámbrico (cambiar el título y regenerar el cartel)\\n"
+                "• descripción: Oferta especial, consultanos por stock y envío (regenerar el texto comercial).",
+                chat_id=chat_id,
+            )
             return
         modalidad = re.sub(r"\s+", " ", m.group(1).strip()).title()
         if modalidad.lower() in ("efectivo", "contado", "cash"): modalidad = "Contado"
@@ -585,19 +612,48 @@ def procesar_callback(cb):
     rec = state.get("drafts", {}).get(did)
     if not rec: enviar_texto("No encuentro ese borrador. Volvé a subir las imágenes a Drive.", chat_id=chat_id); return
     if action == "ok":
-        if rec.get("estado") == "confirmado_listo":
-            enviar_texto("Este cartel ya está confirmado y guardado en 3_publicar. No se publicó automáticamente.", chat_id=chat_id)
+        if rec.get("estado") == "publicado_facebook" or rec.get("facebook_post_id"):
+            enviar_texto(
+                "Este cartel ya figura publicado en Facebook. No lo vuelvo a enviar para evitar duplicados."
+                + (f"\nIdentificador de Facebook: {rec.get('facebook_post_id')}" if rec.get("facebook_post_id") else ""),
+                chat_id=chat_id,
+            )
             return
-        rec["estado"] = "confirmado_listo"
+        if rec.get("estado") == "publicando_facebook":
+            enviar_texto("La publicación de este cartel ya está en curso. Esperá el resultado antes de volver a tocar el botón.", chat_id=chat_id)
+            return
+        if not rec.get("output_id"):
+            enviar_texto("No puedo publicar: este borrador no tiene la imagen final guardada en Drive. Usá Modificar para regenerarlo.", chat_id=chat_id)
+            return
+        rec["estado"] = "publicando_facebook"
         rec["approved_at"] = rec.get("approved_at") or int(time.time())
         save_state()
-        _editar_caption(chat_id, msg.get("message_id"), "✅ CARTEL CONFIRMADO — LISTO PARA PUBLICAR\n\n" + rec.get("caption", ""))
-        enviar_texto(
-            "✅ Cartel confirmado y guardado en 3_publicar.\n"
-            "No se publicó en Facebook ni en Instagram. Quedó listo para que lo publiques cuando quieras.\n"
-            "Los originales permanecen en 1_entrada.",
-            chat_id=chat_id,
-        )
+        try:
+            post_id = publicar_en_facebook(rec)
+            rec["estado"] = "publicado_facebook"
+            rec["facebook_post_id"] = str(post_id or "")
+            rec["facebook_published_at"] = int(time.time())
+            save_state()
+            _editar_caption(
+                chat_id, msg.get("message_id"),
+                "✅ PUBLICADO EN FACEBOOK\n\n" + rec.get("caption", "")
+            )
+            enviar_texto(
+                "✅ Facebook aceptó la publicación del cartel."
+                + (f"\nIdentificador de la publicación: {post_id}" if post_id else "")
+                + "\nLa imagen y el texto se enviaron a la página configurada. Instagram no se publica automáticamente.",
+                chat_id=chat_id,
+            )
+        except Exception as error:
+            log.exception("Falló la publicación en Facebook para el borrador %s", did)
+            rec["estado"] = "pendiente_revision"
+            rec["last_facebook_error"] = str(error)[:1000]
+            save_state()
+            enviar_texto(
+                "❌ Facebook no confirmó la publicación. El borrador sigue guardado y podés volver a intentarlo después de revisar el error.\n\n"
+                + str(error)[:1500],
+                chat_id=chat_id,
+            )
     elif action == "edit":
         state.setdefault("waiting_edit", {})[chat_id] = did; save_state()
         enviar_texto("Escribí un porcentaje nuevo (ejemplo: 35%) para recalcular todos los precios, o un precio final específico (ejemplo: efectivo 125000).", chat_id=chat_id)
