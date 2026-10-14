@@ -295,51 +295,88 @@ def _productos_texto_flexible(texto):
     return encontrados
 
 def _productos_de_texto_proveedor(texto):
-    """Lee listas de proveedor con precios USD/ARS y aclaraciones después del precio."""
+    """Interpreta listas de productos con uno o varios precios sin confundir cuotas."""
     encontrados = []
     vistos = set()
+    # El importe debe tener separador de miles o al menos cuatro cifras.
     precio_patron = re.compile(
         r"(?P<signo>US\$|U\$S|\$)?\s*"
-        r"(?P<importe>\d{1,3}(?:[.,]\d{3}){1,2}|\d{2,})"
-        r"\s*(?P<moneda>USD|US\$|U\$S|DÓLARES?|DOLARES?)?",
-        re.I
+        r"(?P<importe>\d{1,3}(?:[.,]\d{3}){1,2}|\d{4,10})"
+        r"\s*(?P<moneda>USD|ARS|US\$|U\$S|DÓLARES?|DOLARES?)?",
+        re.I,
     )
-    lineas = re.split(r"\n+|\s{2,}", (texto or "").replace("\r", ""))
+    lineas = re.split(r"\n+|[;|]+|\s+[▪●]\s+", (texto or "").replace("\r", ""))
     for linea in lineas:
-        limpia = re.sub(r"\s+", " ", linea).strip().strip("•-* ")
-        if not limpia or re.search(r"\b(total|subtotal|suma)\b", limpia, re.I):
+        limpia = re.sub(r"\s+", " ", linea).strip(" •▪●-* \t")
+        if not limpia or re.search(r"\b(total|subtotal|suma|financiado|cuotas?|inter[eé]s|tarjeta)\b", limpia, re.I):
             continue
-        if re.match(r"(?i)^\s*d[oó]lar\b", limpia):
+        if re.match(r"(?i)^(lista de precios|promoci[oó]n|ofertas del d[ií]a|precios)\s*:?\s*$", limpia):
             continue
         candidatos = []
         for m in precio_patron.finditer(limpia):
-            valor = int(re.sub(r"\D", "", m.group("importe")) or "0")
-            moneda_txt = (m.group("moneda") or "").upper()
-            signo = (m.group("signo") or "").upper()
-            marcado = bool(signo or moneda_txt)
-            if valor > 0 and (marcado or valor >= 1000):
-                es_usd = moneda_txt in ("USD", "US$", "U$S", "DÓLAR", "DÓLARES", "DOLAR", "DOLARES") or signo in ("US$", "U$S")
-                candidatos.append((m, valor, "USD" if es_usd else "ARS", marcado))
-        marcados = [c for c in candidatos if c[3]]
-        if marcados:
-            elegido = marcados[-1]
-        else:
-            al_final = [c for c in candidatos if not limpia[c[0].end():].strip(" *).,:;")]
-            if not al_final:
+            raw = m.group("importe")
+            valor = int(re.sub(r"\D", "", raw) or "0")
+            if not 1000 <= valor <= 100_000_000:
                 continue
-            elegido = al_final[-1]
-        m, importe, moneda, _ = elegido
+            signo = (m.group("signo") or "").upper()
+            moneda_txt = (m.group("moneda") or "").upper()
+            es_usd = signo in ("US$", "U$S") or moneda_txt in ("USD", "US$", "U$S", "DÓLAR", "DÓLARES", "DOLAR", "DOLARES")
+            # Modalidad más próxima al importe: así "lista ... efectivo ... transferencia"
+            # no termina eligiendo por error el importe de transferencia.
+            antes = limpia[max(0, m.start() - 45):m.start()]
+            despues = limpia[m.end():min(len(limpia), m.end() + 30)]
+            contexto = antes + " " + despues
+            modalidad = "Sin identificar"
+            posiciones = []
+            for etiqueta, rx in (
+                ("Efectivo", r"efectivo|efvo\.?|contado|cash|1\s*pago"),
+                ("Transferencia", r"transferencia|transfer|transf\.?"),
+                ("Lista", r"precio\s+de\s+lista|\blista\b|tarjeta|regular"),
+                ("Mayorista", r"mayorista|por\s+mayor"),
+                ("Minorista", r"minorista|por\s+menor"),
+            ):
+                for lab in re.finditer(rx, contexto, re.I):
+                    posiciones.append((abs(lab.start() - len(antes)), etiqueta))
+            if posiciones:
+                modalidad = min(posiciones, key=lambda x: x[0])[1]
+            candidatos.append({
+                "match": m, "costo": valor, "moneda": "USD" if es_usd else "ARS",
+                "modalidad": modalidad, "marcado": bool(signo or moneda_txt),
+            })
+        if not candidatos:
+            continue
+        # Elegir efectivo/contado si está explícito; no adivinar entre varios importes.
+        efectivo = [c for c in candidatos if c["modalidad"] == "Efectivo"]
+        if len(efectivo) == 1:
+            elegido = efectivo[0]
+        elif len(candidatos) == 1:
+            elegido = candidatos[0]
+        else:
+            # Si hay varios precios y ninguno está rotulado como contado, no tomar uno al azar.
+            continue
+        m = elegido["match"]
         nombre = limpia[:m.start()].strip(" -:;$*")
-        if nombre.rstrip(":：").strip().lower() in {"producto", "precio", "efectivo", "contado", "transferencia", "lista"}:
-            continue
+        # Quitar etiquetas de modalidad que hayan quedado antes del importe.
+        nombre = re.sub(
+            r"(?i)\b(precio\s+de\s+lista|precio|efectivo|efvo\.?|contado|cash|transferencia|transfer|transf\.?|lista|ARS|USD)\b",
+            " ", nombre,
+        )
         nombre = re.sub(r"[*_]+", "", nombre)
-        nombre = re.sub(r"\s+", " ", nombre).strip(" -:;$")
-        if len(nombre) < 3 or nombre.lower() in vistos:
+        nombre = re.sub(r"\s+", " ", nombre).strip(" -:;$(),.")
+        nombre = re.sub(r"(?i)^producto\s*:\s*", "", nombre).strip()
+        if len(nombre) < 3 or nombre.lower() in {"producto", "precio", "efectivo", "contado", "transferencia", "lista"}:
             continue
-        vistos.add(nombre.lower())
-        encontrados.append({"etiqueta": "Contado", "producto": nombre[:100], "costo": importe, "moneda": moneda})
-    return encontrados[:18]
-
+        clave = nombre.casefold()
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+        encontrados.append({
+            "etiqueta": "Contado", "producto": nombre[:100],
+            "costo": elegido["costo"], "moneda": elegido["moneda"],
+        })
+        if len(encontrados) >= 36:
+            break
+    return encontrados
 
 def _precios_etiquetados(texto):
     """Compatibilidad: devuelve modalidades explícitas reconocidas por OCR."""
