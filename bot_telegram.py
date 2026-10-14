@@ -715,6 +715,71 @@ def procesar_callback(cb):
         enviar_texto("Borrador cancelado. No se publicó nada ni se movieron los originales.", chat_id=chat_id)
 
 
+def _guardar_video_telegram_en_drive(msg, chat_id):
+    """Guarda el video original en Drive sin modificarlo."""
+    video = msg.get("video")
+    doc = msg.get("document") or {}
+    mime = str(doc.get("mime_type") or "").lower()
+    if not video and mime.startswith("video/"):
+        video = doc
+    if not video:
+        return None
+    meta = requests.get(f"{API}/getFile", params={"file_id": video["file_id"]}, timeout=30)
+    meta.raise_for_status()
+    result = meta.json().get("result", {})
+    if not result.get("file_path"):
+        raise RuntimeError("Telegram no permitió descargar el video.")
+    url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{result['file_path']}"
+    r = requests.get(url, timeout=(30, 180))
+    r.raise_for_status()
+    if len(r.content) > 19000000:
+        raise RuntimeError("El video supera el límite de descarga de Telegram, aproximadamente 20 MB.")
+    ext = Path(str(doc.get("file_name") or result["file_path"])).suffix.lower()
+    if ext not in (".mp4", ".mov", ".m4v", ".webm", ".mpeg", ".mpg"):
+        ext = ".mp4"
+    mime = mime if mime.startswith("video/") else ("video/webm" if ext == ".webm" else "video/mp4")
+    name = f"telegram_video_{int(time.time())}_{uuid.uuid4().hex[:8]}{ext}"
+    service = pi.obtener_servicio_drive()
+    uploaded = pi.subir_imagen_a_drive(service, io.BytesIO(r.content), name, ID_ENTRADA, mime_type=mime)
+    rec = {"id": uuid.uuid4().hex[:10], "nombre": Path(name).stem, "video_drive_id": uploaded["id"],
+           "video_name": name, "video_mime_type": mime, "video_caption": str(msg.get("caption") or ""),
+           "estado": "pendiente_revision", "chat_id": str(chat_id), "created": int(time.time())}
+    return rec
+
+
+def _crear_borrador_video(rec, texto, chat_id):
+    """Prepara la promoción del video sin editar el archivo original."""
+    combined = "\n".join([rec.get("video_caption", ""), texto or ""]).strip()
+    productos = _productos_de_texto_proveedor(combined) or _productos_texto_flexible(combined)
+    if not productos:
+        rec["estado"] = "esperando_precio"
+        state.setdefault("pending_videos", {})[str(chat_id)] = rec
+        save_state()
+        enviar_texto("Guardé el video original sin modificarlo. No pude identificar el precio con el texto recibido. Respondé con el nombre y el precio de contado, por ejemplo: Freezer Bambi, 586000. No hace falta reenviar el video.", chat_id=chat_id)
+        return
+    p = productos[0]
+    nombre, costo, moneda = p.get("producto") or "Producto", int(p["costo"]), p.get("moneda", "ARS")
+    porcentaje = float(GANANCIA_PORCENTAJE)
+    precios = [{"etiqueta": "Contado", "producto": nombre, "moneda": moneda, "costo": costo,
+                "venta": round(costo * (1 + porcentaje / 100))}]
+    rec.update({"nombre": nombre, "precios": precios, "porcentaje": porcentaje,
+                "caption": se.generar_texto_publicitario(nombre, precios), "estado": "pendiente_revision"})
+    state.setdefault("drafts", {})[rec["id"]] = rec
+    state.setdefault("pending_videos", {}).pop(str(chat_id), None)
+    save_state()
+    service = pi.obtener_servicio_drive()
+    buff = io.BytesIO()
+    downloader = MediaIoBaseDownload(buff, service.files().get_media(fileId=rec["video_drive_id"]))
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    buff.seek(0)
+    api("sendVideo", data={"chat_id": str(chat_id), "caption": rec["caption"][:1024],
+                           "reply_markup": json.dumps(teclado(rec["id"]), ensure_ascii=False)},
+        files={"video": (rec["video_name"], buff, rec["video_mime_type"])}, timeout=180)
+    enviar_texto(f"Video original listo, sin modificaciones.\nProducto: {nombre}\nCosto contado: {formatear_precio(precios[0], costo)}\nPrecio con {porcentaje:g}% de ganancia: {formatear_precio(precios[0], precios[0]['venta'])}\n\nAl confirmar, se publicará el mismo video en Facebook con este texto promocional.", chat_id=chat_id)
+
+
 def _guardar_imagen_telegram_en_drive(msg, chat_id):
     """Descarga la imagen de Telegram, la guarda en 1_entrada y la registra como pendiente."""
     foto = None
@@ -790,6 +855,7 @@ def procesar_mensaje(msg):
         return
     # Las fotos se guardan en Drive. Si vienen con texto/caption, se procesa junto con la foto.
     texto = (msg.get("text") or msg.get("caption") or "").strip()
+    es_video = bool(msg.get("video") or str((msg.get("document") or {}).get("mime_type", "")).lower().startswith("video/"))
     es_imagen = bool(msg.get("photo") or (msg.get("document") or {}).get("mime_type", "").lower().startswith("image/"))
 
     # Telegram suele mandar la foto y el nombre/precio como dos mensajes separados.
@@ -829,6 +895,20 @@ def procesar_mensaje(msg):
                 )
                 return
 
+    if es_video:
+        try:
+            video_recibido = _guardar_video_telegram_en_drive(msg, chat_id)
+            if video_recibido:
+                _crear_borrador_video(video_recibido, texto, chat_id)
+                return
+        except Exception as e:
+            log.exception("No pude guardar el video recibido por Telegram")
+            enviar_texto(f"No pude guardar o preparar el video: {e}", chat_id=chat_id)
+            return
+    video_pendiente = state.get("pending_videos", {}).get(chat_id)
+    if texto and video_pendiente and video_pendiente.get("estado") == "esperando_precio" and not es_imagen and not es_video:
+        _crear_borrador_video(video_pendiente, texto, chat_id)
+        return
     if es_imagen:
         try:
             foto_recibida = _guardar_imagen_telegram_en_drive(msg, chat_id)
