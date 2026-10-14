@@ -316,11 +316,14 @@ def _productos_de_texto_proveedor(texto):
     # El importe debe tener separador de miles o al menos cuatro cifras.
     precio_patron = re.compile(
         r"(?P<signo>US\$|U\$S|\$)?\s*"
-        r"(?P<importe>\d{1,3}(?:[.,]\d{3}){1,2}|\d{4,10})"
+        r"(?P<importe>\d{1,3}(?:[.,]\d{3}){1,2}|\d{2,10})"
         r"\s*(?P<moneda>USD|ARS|US\$|U\$S|DÓLARES?|DOLARES?)?",
         re.I,
     )
-    lineas = re.split(r"\n+|[;|]+|\s+[▪●]\s+", (texto or "").replace("\r", ""))
+    # Algunos mensajes reenviados desde WhatsApp llegan con separadores invisibles
+    # (U+FFFC) en vez de saltos de línea.
+    normalizado = (texto or "").replace("\r", "").replace("\ufffc", "\n")
+    lineas = re.split(r"\n+|[;|]+|\s+[▪●]\s+", normalizado)
     for linea in lineas:
         limpia = re.sub(r"\s+", " ", linea).strip(" •▪●-* \t")
         if not limpia or re.search(r"\b(total|subtotal|suma|financiado|cuotas?|inter[eé]s|tarjeta)\b", limpia, re.I):
@@ -331,11 +334,16 @@ def _productos_de_texto_proveedor(texto):
         for m in precio_patron.finditer(limpia):
             raw = m.group("importe")
             valor = int(re.sub(r"\D", "", raw) or "0")
-            if not 1000 <= valor <= 100_000_000:
-                continue
             signo = (m.group("signo") or "").upper()
             moneda_txt = (m.group("moneda") or "").upper()
             es_usd = signo in ("US$", "U$S") or moneda_txt in ("USD", "US$", "U$S", "DÓLAR", "DÓLARES", "DOLAR", "DOLARES")
+            # Precios USD inferiores a 1.000 son habituales en celulares y consolas.
+            # Los importes pequeños solo se aceptan con moneda explícita para no
+            # confundir RAM o almacenamiento con precios.
+            marcado = bool(signo or moneda_txt)
+            if not 1000 <= valor <= 100_000_000:
+                if not (50 <= valor < 1000 and marcado and es_usd):
+                    continue
             # Modalidad más próxima al importe: así "lista ... efectivo ... transferencia"
             # no termina eligiendo por error el importe de transferencia.
             antes = limpia[max(0, m.start() - 45):m.start()]
@@ -356,7 +364,7 @@ def _productos_de_texto_proveedor(texto):
                 modalidad = min(posiciones, key=lambda x: x[0])[1]
             candidatos.append({
                 "match": m, "costo": valor, "moneda": "USD" if es_usd else "ARS",
-                "modalidad": modalidad, "marcado": bool(signo or moneda_txt),
+                "modalidad": modalidad, "marcado": marcado,
             })
         if not candidatos:
             continue
@@ -380,6 +388,9 @@ def _productos_de_texto_proveedor(texto):
         nombre = re.sub(r"\s+", " ", nombre).strip(" -:;$(),.")
         nombre = re.sub(r"(?i)^producto\s*:\s*", "", nombre).strip()
         if len(nombre) < 3 or nombre.lower() in {"producto", "precio", "efectivo", "contado", "transferencia", "lista"}:
+            continue
+        # La cotización del dólar no es un producto para publicar con recargo.
+        if re.match(r"(?i)^(?:d[oó]lar(?:\s+(?:blue|hoy|actual))?|cotizaci[oó]n(?:\s+del\s+d[oó]lar)?)$", nombre.strip()):
             continue
         clave = nombre.casefold()
         if clave in vistos:
