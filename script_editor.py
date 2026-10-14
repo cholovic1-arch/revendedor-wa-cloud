@@ -182,15 +182,42 @@ def analizar_flyer_con_ia(buffer_imagen, texto_ocr: str = "") -> dict[str, Any] 
     return None
 
 def generar_texto_publicitario(nombre_producto: str, precios: list[dict], detalle: str = "") -> str:
-    """Descripción comercial segura; no agrega prestaciones no confirmadas."""
+    """Descripción comercial llamativa, con emojis y datos reales del producto."""
     nombre = (nombre_producto or "Producto").strip()
-    principal = next((p for p in (precios or []) if str(p.get("etiqueta", "")).lower() in ("contado", "efectivo", "cash")), None)
-    if principal is None and precios:
-        principal = precios[0]
-    valor = int((principal or {}).get("venta", 0) or 0)
-    precio = "$" + f"{valor:,}".replace(",", ".") if valor else "consultar precio"
-    lineas = [f"¡Conocé {nombre}!", f"Precio de venta: {precio}."]
-    if detalle:
-        lineas.append(detalle.strip())
-    lineas.append("Consultanos por disponibilidad y envío. Escribinos para más información.")
+    lista = list(precios or [])
+    principal = next(
+        (p for p in lista if str(p.get("etiqueta", "")).lower() in ("contado", "efectivo", "cash")),
+        lista[0] if lista else None,
+    )
+
+    def precio_formateado(item):
+        valor = int((item or {}).get("venta", 0) or 0)
+        moneda = str((item or {}).get("moneda", "ARS")).upper()
+        if not valor:
+            return "consultar precio"
+        importe = f"{valor:,}".replace(",", ".")
+        return f"USD {importe}" if moneda == "USD" else f"${importe}"
+
+    lineas = [
+        "🚨🔥 ¡OFERTA PARA APROVECHAR! 🔥🚨",
+        "",
+        f"🛍️✨ {nombre}",
+        "",
+    ]
+    if len(lista) > 1:
+        for item in lista[:6]:
+            articulo = str(item.get("producto") or item.get("etiqueta") or nombre).strip()
+            lineas.append(f"💥 {articulo}: {precio_formateado(item)}")
+    else:
+        lineas.append(f"💰 PRECIO ESPECIAL: {precio_formateado(principal)}")
+
+    if detalle and detalle.strip():
+        lineas.extend(["", f"⭐ {detalle.strip()}"])
+
+    lineas.extend([
+        "",
+        "📲 ¿Te interesa? ¡Escribinos por privado!",
+        "📦 Consultá disponibilidad y costo de envío.",
+        "💬 Estamos para ayudarte con tu compra.",
+    ])
     return "\n".join(lineas)[:1000]
