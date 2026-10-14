@@ -748,31 +748,74 @@ def _guardar_video_telegram_en_drive(msg, chat_id):
 
 
 def _crear_borrador_video(rec, texto, chat_id):
-    """Prepara la promoción del video sin editar el archivo original."""
-    combined = "\n".join([rec.get("video_caption", ""), texto or ""]).strip()
-    productos = _productos_de_texto_proveedor(combined) or _productos_texto_flexible(combined)
-    if not productos:
-        rec["estado"] = "esperando_precio"
-        state.setdefault("pending_videos", {})[str(chat_id)] = rec
-        save_state()
-        enviar_texto("Guardé el video original sin modificarlo. No pude identificar el precio con el texto recibido. Respondé con el nombre y el precio de contado, por ejemplo: Freezer Bambi, 586000. No hace falta reenviar el video.", chat_id=chat_id)
-        return
-    p = productos[0]
-    nombre, costo, moneda = p.get("producto") or "Producto", int(p["costo"]), p.get("moneda", "ARS")
-    porcentaje = float(GANANCIA_PORCENTAJE)
-    precios = [{"etiqueta": "Contado", "producto": nombre, "moneda": moneda, "costo": costo,
-                "venta": round(costo * (1 + porcentaje / 100))}]
-    rec.update({"nombre": nombre, "precios": precios, "porcentaje": porcentaje,
-                "caption": se.generar_texto_publicitario(nombre, precios), "estado": "pendiente_revision"})
-    state.setdefault("drafts", {})[rec["id"]] = rec
-    state.setdefault("pending_videos", {}).pop(str(chat_id), None)
-    save_state()
+    """Lee texto visible en algunos fotogramas, pero conserva intacto el video original."""
+    import subprocess, tempfile
+    from PIL import Image
+    import pytesseract
     service = pi.obtener_servicio_drive()
     buff = io.BytesIO()
     downloader = MediaIoBaseDownload(buff, service.files().get_media(fileId=rec["video_drive_id"]))
     done = False
     while not done:
         _, done = downloader.next_chunk()
+    textos = []
+    analisis_ia = []
+    with tempfile.TemporaryDirectory(prefix="revendedor_video_") as tmp:
+        origen = str(Path(tmp) / "video_original")
+        Path(origen).write_bytes(buff.getvalue())
+        patron = str(Path(tmp) / "cuadro_%02d.jpg")
+        try:
+            subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", origen,
+                            "-vf", "fps=1/3,scale='min(960,iw)':-2", "-frames:v", "8", patron],
+                           check=True, timeout=90, capture_output=True)
+        except FileNotFoundError as exc:
+            raise RuntimeError("FFmpeg no está instalado en el entorno; no puedo leer los precios que aparecen dentro del video.") from exc
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError("No pude leer los fotogramas del video. Probá con un MP4 común.") from exc
+        for frame_path in sorted(Path(tmp).glob("cuadro_*.jpg")):
+            frame = Image.open(frame_path).convert("RGB")
+            try:
+                textos.append(pytesseract.image_to_string(frame, lang="spa+eng"))
+            except Exception:
+                textos.append(pytesseract.image_to_string(frame, lang="eng"))
+            frame_buff = io.BytesIO()
+            frame.save(frame_buff, format="JPEG", quality=88)
+            frame_buff.seek(0)
+            try:
+                result = se.analizar_flyer_con_ia(frame_buff, textos[-1])
+                if result:
+                    analisis_ia.append(result)
+            except Exception:
+                log.exception("No se pudo analizar un fotograma con IA; continúo con los demás.")
+    combined = "\n".join([rec.get("video_caption", ""), texto or "", *textos]).strip()
+    productos = _productos_de_texto_proveedor(combined) or _productos_texto_flexible(combined)
+    ai = next((a for a in analisis_ia if a.get("precio_contado") and
+               str(a.get("modalidad_precio", "")).lower() in ("efectivo", "contado") and
+               float(a.get("confianza", 0) or 0) >= 0.55), None)
+    if productos:
+        p = productos[0]
+        nombre = str(p.get("producto") or (ai or {}).get("nombre_producto") or "Producto")[:100]
+        costo, moneda = int(p["costo"]), p.get("moneda", "ARS")
+    elif ai:
+        nombre = str(ai.get("nombre_producto") or "Producto")[:100]
+        costo, moneda = int(float(ai["precio_contado"])), "ARS"
+    else:
+        rec["estado"] = "esperando_precio"
+        rec["video_texto_ocr"] = combined[:6000]
+        state.setdefault("pending_videos", {})[str(chat_id)] = rec
+        save_state()
+        enviar_texto("Guardé el video original sin modificarlo y revisé varios fotogramas, pero no pude confirmar con seguridad el precio de contado. Respondé con el nombre del producto y el precio de contado, por ejemplo: Freezer Bambi, 586000. No hace falta reenviar el video.", chat_id=chat_id)
+        return
+    porcentaje = float(GANANCIA_PORCENTAJE)
+    precios = [{"etiqueta": "Contado", "producto": nombre, "moneda": moneda, "costo": costo,
+                "venta": round(costo * (1 + porcentaje / 100))}]
+    detalle = str((ai or {}).get("detalle_producto") or "")
+    rec.update({"nombre": nombre, "precios": precios, "porcentaje": porcentaje,
+                "caption": se.generar_texto_publicitario(nombre, precios, detalle),
+                "estado": "pendiente_revision", "video_texto_ocr": combined[:6000]})
+    state.setdefault("drafts", {})[rec["id"]] = rec
+    state.setdefault("pending_videos", {}).pop(str(chat_id), None)
+    save_state()
     buff.seek(0)
     api("sendVideo", data={"chat_id": str(chat_id), "caption": rec["caption"][:1024],
                            "reply_markup": json.dumps(teclado(rec["id"]), ensure_ascii=False)},
