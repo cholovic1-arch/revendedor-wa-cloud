@@ -559,11 +559,11 @@ def _modificar(rec, chat_id, instruccion):
         if not m:
             # Aceptar cambios explícitos de nombre o descripción y regenerar el cartel.
             nombre_cambio = re.match(
-                r"(?is)^\\s*(?:cambiar\\s+)?(?:el\\s+)?nombre\\s*(?:a|por|:)\\s*(.+?)\\s*$|^\\s*cambiar\\s+nombre\\s+(?:a|por)\\s+(.+?)\\s*$",
+                r"(?is)^\s*(?:cambiar\s+)?(?:el\s+)?nombre\s*(?:a|por|:)\s*(.+?)\s*$|^\s*cambiar\s+nombre\s+(?:a|por)\s+(.+?)\s*$",
                 instruccion,
             )
             descripcion_cambio = re.match(
-                r"(?is)^\\s*(?:cambiar\\s+)?(?:la\\s+)?descripci[oó]n\\s*(?:a|por|:)\\s*(.+?)\\s*$",
+                r"(?is)^\s*(?:cambiar\s+)?(?:la\s+)?descripci[oó]n\s*(?:a|por|:)\s*(.+?)\s*$",
                 instruccion,
             )
             if nombre_cambio:
@@ -656,7 +656,7 @@ def procesar_callback(cb):
             )
     elif action == "edit":
         state.setdefault("waiting_edit", {})[chat_id] = did; save_state()
-        enviar_texto("Escribí un porcentaje nuevo (ejemplo: 35%) para recalcular todos los precios, o un precio final específico (ejemplo: efectivo 125000).", chat_id=chat_id)
+        enviar_texto("Decime qué querés cambiar y regeneraré el borrador. Ejemplos: 35% (recalcular precios), efectivo 125000 (cambiar precio), cambiar nombre a Taladro inalámbrico, o descripción: Oferta especial, consultanos por stock y envío. Después te enviaré el nuevo cartel para revisar y publicar.", chat_id=chat_id)
     elif action == "cancel":
         rec["estado"] = "cancelado"; save_state()
         _editar_caption(chat_id, msg.get("message_id"), "❌ BORRADOR CANCELADO\nLos originales siguen en 1_entrada.")
