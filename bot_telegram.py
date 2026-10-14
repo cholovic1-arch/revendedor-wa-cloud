@@ -594,17 +594,25 @@ def _regenerar(rec, chat_id, nuevo=False):
     upload = pi.subir_imagen_a_drive(service, cartel, filename, ID_PUBLICAR)
     rec["output_id"] = upload.get("id"); rec["output_name"] = filename
     precios_caption = []
-    detalles_productos = []
     for item in rec["precios"]:
         copia = dict(item)
-        detalle_item = str(item.get("detalle", "")).strip()
+        detalle_item = str(item.get("detalle", "")).strip().strip("()")
+        detalle_item = re.sub(r"[*_]+", "", detalle_item)
+        detalle_item = re.sub(r"(?i)^ultimo$", "Última unidad", detalle_item)
+        detalle_item = re.sub(r"(?i)^ultima unidad en ", "Última unidad en ", detalle_item)
+        detalle_item = re.sub(r"\s+", " ", detalle_item).strip(" -:;,.")
         if detalle_item:
             copia["producto"] = (str(copia.get("producto", "")).strip() + " — " + detalle_item).strip(" —")
-            detalles_productos.append(detalle_item)
         precios_caption.append(copia)
     detalle_general = str(rec.get("detalle_producto", "")).strip()
-    detalles_caption = list(dict.fromkeys(detalles_productos + ([detalle_general] if detalle_general else [])))
-    rec["caption"] = ((str(rec.get("descripcion_ia", "")).strip() + "\n\n") if rec.get("descripcion_ia") else "") + se.generar_texto_publicitario(rec["nombre"], precios_caption, " | ".join(detalles_caption))
+    hay_consola = any(re.search(r"play\s*station|playstation|\bps5\b|consola", str(p.get("producto", "")), re.I) for p in precios_caption)
+    if detalle_general and hay_consola:
+        for p in precios_caption:
+            if re.search(r"iphone|samsung|galaxy|moto|motorola|redmi|xiaomi|pixel|z\s*flip|\ba\d{2}\b|\bs\d{2}\b", str(p.get("producto", "")), re.I):
+                p["producto"] = str(p.get("producto", "")).strip() + " — Solo equipos exhibidos en vitrina; si no está exhibido, no hay stock"
+                break
+        detalle_general = ""
+    rec["caption"] = ((str(rec.get("descripcion_ia", "")).strip() + "\n\n") if rec.get("descripcion_ia") else "") + se.generar_texto_publicitario(rec["nombre"], precios_caption, detalle_general)
     rec["estado"] = "pendiente_revision"; save_state(); cartel.seek(0)
     enviar_foto(cartel, filename, rec["caption"], teclado(rec["id"]), chat_id)
     if nuevo:
