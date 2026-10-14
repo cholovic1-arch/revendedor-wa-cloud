@@ -190,22 +190,37 @@ def texto_cartel(nombre, precios, porcentaje):
     )
 
 def publicar_en_facebook(rec):
-    """Publica el cartel aprobado como foto en la página configurada."""
+    """Publica el video original sin modificarlo o el cartel fotográfico."""
     page_id = os.environ.get("FACEBOOK_PAGE_ID", "").strip()
     page_token = os.environ.get("FACEBOOK_PAGE_ACCESS_TOKEN", "").strip()
     if not page_id or not page_token:
         raise RuntimeError("Faltan los secretos FACEBOOK_PAGE_ID y FACEBOOK_PAGE_ACCESS_TOKEN en GitHub Actions.")
-    if not rec.get("output_id"):
-        raise RuntimeError("El borrador no tiene una imagen final guardada en Google Drive.")
     service = pi.obtener_servicio_drive()
-    foto = pi.descargar_imagen_a_memoria(service, rec["output_id"])
-    foto.seek(0)
-    response = requests.post(
-        f"https://graph.facebook.com/v26.0/{page_id}/photos",
-        data={"caption": rec.get("caption", ""), "access_token": page_token},
-        files={"source": (rec.get("output_name") or "cartel.jpg", foto, "image/jpeg")},
-        timeout=90,
-    )
+    if rec.get("video_drive_id"):
+        buff = io.BytesIO()
+        downloader = MediaIoBaseDownload(buff, service.files().get_media(fileId=rec["video_drive_id"]))
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        buff.seek(0)
+        response = requests.post(
+            f"https://graph.facebook.com/v26.0/{page_id}/videos",
+            data={"description": rec.get("caption", ""), "access_token": page_token},
+            files={"source": (rec.get("video_name") or "video_producto.mp4", buff,
+                              rec.get("video_mime_type") or "video/mp4")},
+            timeout=(30, 600),
+        )
+    else:
+        if not rec.get("output_id"):
+            raise RuntimeError("El borrador no tiene una imagen final guardada en Google Drive.")
+        foto = pi.descargar_imagen_a_memoria(service, rec["output_id"])
+        foto.seek(0)
+        response = requests.post(
+            f"https://graph.facebook.com/v26.0/{page_id}/photos",
+            data={"caption": rec.get("caption", ""), "access_token": page_token},
+            files={"source": (rec.get("output_name") or "cartel.jpg", foto, "image/jpeg")},
+            timeout=90,
+        )
     try:
         payload = response.json()
     except ValueError:
@@ -659,8 +674,8 @@ def procesar_callback(cb):
         if rec.get("estado") == "publicando_facebook":
             enviar_texto("La publicación de este cartel ya está en curso. Esperá el resultado antes de volver a tocar el botón.", chat_id=chat_id)
             return
-        if not rec.get("output_id"):
-            enviar_texto("No puedo publicar: este borrador no tiene la imagen final guardada en Drive. Usá Modificar para regenerarlo.", chat_id=chat_id)
+        if not rec.get("video_drive_id") and not rec.get("output_id"):
+            enviar_texto("No puedo publicar: este borrador no tiene el video o la imagen final guardados en Drive.", chat_id=chat_id)
             return
         rec["estado"] = "publicando_facebook"
         rec["approved_at"] = rec.get("approved_at") or int(time.time())
