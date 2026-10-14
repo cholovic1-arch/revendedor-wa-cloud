@@ -9,6 +9,11 @@ import procesar_imagenes as pi
 import script_editor as se
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ID_ENTRADA, ID_PUBLICAR, GANANCIA_PORCENTAJE, ESCANEO_DRIVE_SEGUNDOS
 
+
+def porcentaje_para_moneda(moneda="ARS"):
+    """Usa 20% para costos explícitos en USD y la ganancia configurada (30% por defecto) para ARS."""
+    return 20.0 if str(moneda or "ARS").strip().upper() == "USD" else float(GANANCIA_PORCENTAJE)
+
 BASE = Path(__file__).resolve().parent
 STATE_FILE = BASE / "estado_revendedor.json"
 API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
@@ -544,9 +549,10 @@ def _crear_borrador(service, lote, chat_id):
             "Los originales siguen en 1_entrada.",
             chat_id=chat_id)
         return
-    porcentaje = float(GANANCIA_PORCENTAJE)
+    moneda_detectada = detectados[0].get("moneda", "ARS")
+    porcentaje = porcentaje_para_moneda(moneda_detectada)
     precios = [{"etiqueta": "Contado", "costo": int(detectados[0]["costo"]),
-                "moneda": detectados[0].get("moneda", "ARS"),
+                "moneda": moneda_detectada,
                 "venta": round(int(detectados[0]["costo"]) * (1 + porcentaje / 100))}]
     nombre = nombre_caption or ia_nombre or pi.inferir_nombre_producto(texto_ocr)
     if nombre == "Producto":
@@ -809,7 +815,7 @@ def _crear_borrador_video(rec, texto, chat_id):
         costo, moneda = int(p["costo"]), p.get("moneda", "ARS")
     elif ai:
         nombre = str(ai.get("nombre_producto") or "Producto")[:100]
-        costo, moneda = int(float(ai["precio_contado"])), "ARS"
+        costo, moneda = int(float(ai["precio_contado"])), str(ai.get("moneda", "ARS")).upper()
     else:
         rec["estado"] = "esperando_precio"
         rec["video_texto_ocr"] = combined[:6000]
@@ -817,7 +823,7 @@ def _crear_borrador_video(rec, texto, chat_id):
         save_state()
         enviar_texto("Guardé el video original sin modificarlo y revisé varios fotogramas, pero no pude confirmar con seguridad el precio de contado. Respondé con el nombre del producto y el precio de contado, por ejemplo: Freezer Bambi, 586000. No hace falta reenviar el video.", chat_id=chat_id)
         return
-    porcentaje = float(GANANCIA_PORCENTAJE)
+    porcentaje = porcentaje_para_moneda(moneda)
     precios = [{"etiqueta": "Contado", "producto": nombre, "moneda": moneda, "costo": costo,
                 "venta": round(costo * (1 + porcentaje / 100))}]
     detalle = str((ai or {}).get("detalle_producto") or "")
@@ -1064,7 +1070,8 @@ def procesar_mensaje(msg):
             precios_grupo = [{
                 "etiqueta": "Contado", "producto": p["producto"],
                 "moneda": p.get("moneda", "ARS"), "costo": int(p["costo"]),
-                "venta": round(int(p["costo"]) * (1 + porcentaje / 100))
+                "porcentaje": porcentaje_para_moneda(p.get("moneda", "ARS")),
+                "venta": round(int(p["costo"]) * (1 + porcentaje_para_moneda(p.get("moneda", "ARS")) / 100))
             } for p in grupo]
             nombre_grupo = "Ofertas del día" if len(grupos) == 1 else f"Ofertas del día ({indice}/{len(grupos)})"
             rec_grupo = {
@@ -1084,7 +1091,8 @@ def procesar_mensaje(msg):
         "producto": p.get("producto", ""),
         "moneda": p.get("moneda", "ARS"),
         "costo": int(p["costo"]),
-        "venta": round(int(p["costo"]) * (1 + porcentaje / 100))
+        "porcentaje": porcentaje_para_moneda(p.get("moneda", "ARS")),
+        "venta": round(int(p["costo"]) * (1 + porcentaje_para_moneda(p.get("moneda", "ARS")) / 100))
     } for p in detectados[:6]]
     foto_id = pendiente.get("foto_id")
     if not foto_id and not sin_foto:
