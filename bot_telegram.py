@@ -390,8 +390,10 @@ def _productos_de_texto_proveedor(texto):
             " ", nombre,
         )
         nombre = re.sub(r"[*_]+", "", nombre)
-        nombre = re.sub(r"\s+", " ", nombre).strip(" -:;$(),.")
+        nombre = re.sub(r"\s+", " ", nombre).strip(" -:;$,.")
         nombre = re.sub(r"(?i)^producto\s*:\s*", "", nombre).strip()
+        detalle = re.sub(r"[*_]+", "", limpia[m.end():]).strip(" -:;$.")
+        detalle = re.sub(r"\s+", " ", detalle)[:120]
         if len(nombre) < 3 or nombre.lower() in {"producto", "precio", "efectivo", "contado", "transferencia", "lista"}:
             continue
         # La cotización del dólar no es un producto para publicar con recargo.
@@ -403,7 +405,7 @@ def _productos_de_texto_proveedor(texto):
         vistos.add(clave)
         encontrados.append({
             "etiqueta": "Contado", "producto": nombre[:100],
-            "costo": elegido["costo"], "moneda": elegido["moneda"],
+            "detalle": detalle, "costo": elegido["costo"], "moneda": elegido["moneda"],
         })
         if len(encontrados) >= 36:
             break
@@ -591,7 +593,18 @@ def _regenerar(rec, chat_id, nuevo=False):
     filename = f"reventa_{rec['id']}_{uuid.uuid4().hex[:5]}.jpg"
     upload = pi.subir_imagen_a_drive(service, cartel, filename, ID_PUBLICAR)
     rec["output_id"] = upload.get("id"); rec["output_name"] = filename
-    rec["caption"] = ((str(rec.get("descripcion_ia", "")).strip() + "\n\n") if rec.get("descripcion_ia") else "") + se.generar_texto_publicitario(rec["nombre"], rec["precios"], str(rec.get("detalle_producto", "")))
+    precios_caption = []
+    detalles_productos = []
+    for item in rec["precios"]:
+        copia = dict(item)
+        detalle_item = str(item.get("detalle", "")).strip()
+        if detalle_item:
+            copia["producto"] = (str(copia.get("producto", "")).strip() + " — " + detalle_item).strip(" —")
+            detalles_productos.append(detalle_item)
+        precios_caption.append(copia)
+    detalle_general = str(rec.get("detalle_producto", "")).strip()
+    detalles_caption = list(dict.fromkeys(detalles_productos + ([detalle_general] if detalle_general else [])))
+    rec["caption"] = ((str(rec.get("descripcion_ia", "")).strip() + "\n\n") if rec.get("descripcion_ia") else "") + se.generar_texto_publicitario(rec["nombre"], precios_caption, " | ".join(detalles_caption))
     rec["estado"] = "pendiente_revision"; save_state(); cartel.seek(0)
     enviar_foto(cartel, filename, rec["caption"], teclado(rec["id"]), chat_id)
     if nuevo:
@@ -1013,6 +1026,9 @@ def procesar_mensaje(msg):
     productos_proveedor = _productos_de_texto_proveedor(texto)
     if not productos_proveedor:
         productos_proveedor = _productos_texto_flexible(texto)
+    nota_stock_proveedor = ""
+    if re.search(r"vitrina|exhibid", texto, re.I) and re.search(r"stock|disponib|si no", texto, re.I):
+        nota_stock_proveedor = "Stock informado por el proveedor: los celulares disponibles son únicamente los exhibidos en vitrina; si un equipo no está exhibido, no hay stock."
     log.info(
         "Mensaje de Telegram recibido: chat_autorizado=%s, texto=%s, caracteres=%d, fotos=%d, productos_detectados=%d",
         chat_id == str(TELEGRAM_CHAT_ID), bool(texto), len(texto),
@@ -1071,13 +1087,14 @@ def procesar_mensaje(msg):
                 "etiqueta": "Contado", "producto": p["producto"],
                 "moneda": p.get("moneda", "ARS"), "costo": int(p["costo"]),
                 "porcentaje": porcentaje_para_moneda(p.get("moneda", "ARS")),
+                "detalle": p.get("detalle", ""),
                 "venta": round(int(p["costo"]) * (1 + porcentaje_para_moneda(p.get("moneda", "ARS")) / 100))
             } for p in grupo]
             nombre_grupo = "Ofertas del día" if len(grupos) == 1 else f"Ofertas del día ({indice}/{len(grupos)})"
             rec_grupo = {
                 "id": uuid.uuid4().hex[:10], "nombre": nombre_grupo,
                 "precios": precios_grupo, "porcentaje": porcentaje, "foto_drive_id": None,
-                "archivos_origen": [], "estado": "pendiente_revision",
+                "archivos_origen": [], "detalle_producto": nota_stock_proveedor, "estado": "pendiente_revision",
                 "chat_id": chat_id, "created": int(time.time())
             }
             state.setdefault("drafts", {})[rec_grupo["id"]] = rec_grupo
@@ -1092,6 +1109,7 @@ def procesar_mensaje(msg):
         "moneda": p.get("moneda", "ARS"),
         "costo": int(p["costo"]),
         "porcentaje": porcentaje_para_moneda(p.get("moneda", "ARS")),
+        "detalle": p.get("detalle", ""),
         "venta": round(int(p["costo"]) * (1 + porcentaje_para_moneda(p.get("moneda", "ARS")) / 100))
     } for p in detectados[:6]]
     foto_id = pendiente.get("foto_id")
@@ -1100,7 +1118,7 @@ def procesar_mensaje(msg):
         return
     rec = {"id": uuid.uuid4().hex[:10], "nombre": nombre if nombre != "Producto" else "Producto",
            "precios": precios, "porcentaje": porcentaje, "foto_drive_id": foto_id,
-           "archivos_origen": pendiente.get("nombres", []), "estado": "pendiente_revision",
+           "archivos_origen": pendiente.get("nombres", []), "detalle_producto": nota_stock_proveedor, "estado": "pendiente_revision",
            "chat_id": chat_id, "created": int(time.time())}
     state.setdefault("drafts", {})[rec["id"]] = rec
     save_state()
