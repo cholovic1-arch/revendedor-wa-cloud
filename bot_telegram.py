@@ -596,23 +596,29 @@ def _regenerar(rec, chat_id, nuevo=False):
     precios_caption = []
     for item in rec["precios"]:
         copia = dict(item)
+        producto = re.sub(r"[*_]+", "", str(copia.get("producto", "")).strip())
+        producto = re.sub(r"(?i)\bULTIMA\s+UNIDAD\b", "Última unidad", producto)
+        producto = re.sub(r"(?i)\bULTIMO\b", "Última unidad", producto)
+        producto = re.sub(r"\s+", " ", producto).strip(" -:;,.")
         detalle_item = str(item.get("detalle", "")).strip().strip("()")
         detalle_item = re.sub(r"[*_]+", "", detalle_item)
         detalle_item = re.sub(r"(?i)^ultimo$", "Última unidad", detalle_item)
         detalle_item = re.sub(r"(?i)^ultima unidad en ", "Última unidad en ", detalle_item)
+        detalle_item = re.sub(r"(?i)^ultima unidad$", "Última unidad", detalle_item)
         detalle_item = re.sub(r"\s+", " ", detalle_item).strip(" -:;,.")
         if detalle_item:
-            copia["producto"] = (str(copia.get("producto", "")).strip() + " — " + detalle_item).strip(" —")
+            producto = (producto + " — " + detalle_item).strip(" —")
+        copia["producto"] = producto
         precios_caption.append(copia)
     detalle_general = str(rec.get("detalle_producto", "")).strip()
-    hay_consola = any(re.search(r"play\s*station|playstation|\bps5\b|consola", str(p.get("producto", "")), re.I) for p in precios_caption)
-    if detalle_general and hay_consola:
-        for p in precios_caption:
-            if re.search(r"iphone|samsung|galaxy|moto|motorola|redmi|xiaomi|pixel|z\s*flip|\ba\d{2}\b|\bs\d{2}\b", str(p.get("producto", "")), re.I):
-                p["producto"] = str(p.get("producto", "")).strip() + " — Solo equipos exhibidos en vitrina; si no está exhibido, no hay stock"
-                break
+    es_aviso_stock = bool(re.search(r"vitrina|exhibid", detalle_general, re.I) and re.search(r"stock|disponib|si no", detalle_general, re.I))
+    hay_celular = any(re.search(r"iphone|samsung|galaxy|moto|motorola|redmi|xiaomi|pixel|z\s*flip|\ba\d{2}\b|\bs\d{2}\b|celular|smartphone", str(p.get("producto", "")), re.I) for p in precios_caption)
+    if es_aviso_stock:
         detalle_general = ""
-    rec["caption"] = ((str(rec.get("descripcion_ia", "")).strip() + "\n\n") if rec.get("descripcion_ia") else "") + se.generar_texto_publicitario(rec["nombre"], precios_caption, detalle_general)
+    caption_base = ((str(rec.get("descripcion_ia", "")).strip() + "\n\n") if rec.get("descripcion_ia") else "") + se.generar_texto_publicitario(rec["nombre"], precios_caption, detalle_general)
+    if es_aviso_stock and hay_celular:
+        caption_base += "\n\n⭐ Disponibilidad: los celulares disponibles son únicamente los exhibidos en vitrina. Si un equipo no está exhibido, no hay stock."
+    rec["caption"] = caption_base
     rec["estado"] = "pendiente_revision"; save_state(); cartel.seek(0)
     enviar_foto(cartel, filename, rec["caption"], teclado(rec["id"]), chat_id)
     if nuevo:
