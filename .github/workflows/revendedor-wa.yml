@@ -48,7 +48,7 @@ jobs:
           if [ "$NEED_INSTALL" -eq 0 ] && ! tesseract --list-langs 2>/dev/null | grep -qx spa; then NEED_INSTALL=1; fi
           if [ "$NEED_INSTALL" -eq 1 ]; then
             sudo apt-get update -qq
-            sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng
+            sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng ffmpeg
           fi
       - name: Instalar dependencias Python
         run: pip install -r requirements.txt
